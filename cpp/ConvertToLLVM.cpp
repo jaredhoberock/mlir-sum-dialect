@@ -28,7 +28,8 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto sumTy = cast<SumType>(op.getResult().getType());
-    auto llvmStructTy = cast<LLVM::LLVMStructType>(getTypeConverter()->convertType(sumTy));
+    auto llvmStructTy = dyn_cast_or_null<LLVM::LLVMStructType>(getTypeConverter()->convertType(sumTy));
+    if (!llvmStructTy) return op.emitError() << "cannot lower sum type to LLVM: " << sumTy;
 
     // Get tag type from the converted struct
     auto tagTy = cast<IntegerType>(llvmStructTy.getBody()[0]);
@@ -102,7 +103,9 @@ struct MatchOpLowering : OpConversionPattern<MatchOp> {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto sumTy = cast<SumType>(op.getInput().getType());
-    auto llvmStructTy = cast<LLVM::LLVMStructType>(getTypeConverter()->convertType(sumTy));
+    auto llvmStructTy = dyn_cast_or_null<LLVM::LLVMStructType>(getTypeConverter()->convertType(sumTy));
+    if (!llvmStructTy) return op.emitError() << "cannot lower sum type to LLVM: " << sumTy;
+
     auto tagTy = cast<IntegerType>(llvmStructTy.getBody()[0]);
     auto variants = sumTy.getVariants();
 
