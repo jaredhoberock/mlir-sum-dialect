@@ -10,6 +10,7 @@ A sum type with variants. Each variant has a payload type.
 
 ```mlir
 !sum.sum<(i64, tuple<>)>  // variant 0: i64, variant 1: unit
+```
 
 ## Operations
 
