@@ -40,7 +40,8 @@ MlirOperation sumMatchOpCreate(MlirLocation loc, MlirValue input, const MlirType
   OpBuilder builder(unwrap(loc).getContext());
   
   auto inputValue = unwrap(input);
-  auto sumType = cast<SumType>(inputValue.getType());
+  auto sumType = dyn_cast<SumType>(inputValue.getType());
+  if (!sumType) return {};
   auto variants = sumType.getVariants();
   
   SmallVector<Type> results;
