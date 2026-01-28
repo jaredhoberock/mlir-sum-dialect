@@ -47,6 +47,12 @@ MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
   return wrap(builder.create(state));
 }
 
+MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
+  OpBuilder builder(unwrap(loc)->getContext());
+  auto op = builder.create<IsVariantOp>(unwrap(loc), unwrap(input), index);
+  return wrap(op.getOperation());
+}
+
 MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index, MlirValue payload) {
   OpBuilder builder(unwrap(loc)->getContext());
   auto indexAttr = builder.getIndexAttr(index);

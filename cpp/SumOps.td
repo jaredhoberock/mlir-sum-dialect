@@ -33,6 +33,31 @@ def GetOp : SumDialectOp<"get", [Pure]> {
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input)) `->` type($payload)";
 }
 
+def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
+  let summary = "Check if a sum value is a specific variant";
+  let description = [{
+    Returns true if the sum value's active variant matches the given index.
+    
+    Example:
+        %is_some = sum.is_variant %x, 0 : !sum.sum<(i64, tuple<>)>
+  }];
+  
+  let arguments = (ins
+    SumType:$input,
+    IndexAttr:$index
+  );
+  let results = (outs I1:$result);
+  
+  let hasVerifier = 1;
+  let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input))";
+  
+  let builders = [
+    OpBuilder<(ins "Value":$input, "int64_t":$index), [{
+      build($_builder, $_state, $_builder.getI1Type(), input, $_builder.getIndexAttr(index));
+    }]>
+  ];
+}
+
 def MakeOp : SumDialectOp<"make", [Pure]> {
   let summary = "Construct a sum type variant";
   let description = [{

@@ -9,6 +9,7 @@ unsafe extern "C" {
     fn sumRegisterDialect(ctx: MlirContext);
     fn sumSumTypeCreate(ctx: MlirContext, variants: *const MlirType, nVariants: isize) -> MlirType;
     fn sumGetOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
+    fn sumIsVariantOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
     fn sumMakeOpCreate(loc: MlirLocation, resultTy: MlirType, index: i64, payload: MlirValue) -> MlirOperation;
     fn sumMatchOpCreate(loc: MlirLocation, input: MlirValue, resultTypes: *const MlirType, nResults: isize) -> MlirOperation;
     fn sumTagOpCreate(loc: MlirLocation, input: MlirValue) -> MlirOperation;
@@ -37,6 +38,21 @@ pub fn get<'c>(
 ) -> Operation<'c> {
     unsafe {
         let op = sumGetOpCreate(
+            loc.to_raw(),
+            input.to_raw(),
+            index as i64,
+        );
+        Operation::from_raw(op)
+    }
+}
+
+pub fn is_variant<'c>(
+    loc: Location<'c>,
+    input: Value<'c, '_>,
+    index: usize,
+) -> Operation<'c> {
+    unsafe {
+        let op = sumIsVariantOpCreate(
             loc.to_raw(),
             input.to_raw(),
             index as i64,

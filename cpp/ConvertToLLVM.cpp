@@ -94,6 +94,37 @@ struct GetOpLowering : OpConversionPattern<GetOp> {
   }
 };
 
+struct IsVariantOpLowering : OpConversionPattern<IsVariantOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(IsVariantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto sumTy = cast<SumType>(op.getInput().getType());
+
+    auto typesOrFail = getSumLLVMTypes(sumTy, *getTypeConverter());
+    if (failed(typesOrFail))
+      return op.emitOpError() << "cannot lower sum type to LLVM: " << sumTy;
+    auto [llvmStructTy, tagTy] = *typesOrFail;
+
+    // Extract tag from struct value
+    Value tag = rewriter.create<LLVM::ExtractValueOp>(loc, adaptor.getInput(), 0);
+
+    // Create constant for expected index
+    int64_t index = op.getIndex().getZExtValue();
+    Value expected = rewriter.create<LLVM::ConstantOp>(
+        loc, tagTy, rewriter.getIntegerAttr(tagTy, index));
+
+    // Compare tag == expected
+    Value result = rewriter.create<LLVM::ICmpOp>(
+        loc, LLVM::ICmpPredicate::eq, tag, expected);
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 struct MakeOpLowering : OpConversionPattern<MakeOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -259,6 +290,7 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
 
   patterns.add<
     GetOpLowering,
+    IsVariantOpLowering,
     MakeOpLowering,
     MatchOpLowering,
     TagOpLowering

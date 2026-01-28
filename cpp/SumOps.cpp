@@ -38,6 +38,24 @@ LogicalResult GetOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// IsVariantOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult IsVariantOp::verify() {
+  auto sumType = llvm::cast<SumType>(getInput().getType());
+  int64_t index = getIndex().getZExtValue();
+  int64_t numVariants = sumType.getVariants().size();
+  
+  if (index < 0 || index >= numVariants) {
+    return emitOpError("variant index ")
+           << index << " is out of bounds for sum type with "
+           << numVariants << " variants";
+  }
+  
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // MakeOp
 //===----------------------------------------------------------------------===//
 
