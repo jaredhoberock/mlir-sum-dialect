@@ -1,4 +1,5 @@
 #include "c_api.h"
+#include "ConvertToSCF.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
@@ -106,6 +107,10 @@ MlirOperation sumYieldOpCreate(MlirLocation loc, const MlirValue *results, intpt
   
   auto op = builder.create<YieldOp>(unwrap(loc), values);
   return wrap(op.getOperation());
+}
+
+MlirPass sumCreateConvertToSCFPass() {
+  return wrap(createConvertSumToSCFPass().release());
 }
 
 } // end extern "C"

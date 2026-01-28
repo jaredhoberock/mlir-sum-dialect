@@ -14,7 +14,7 @@ MLIR_INCLUDE = /home/jhoberock/dev/git/llvm-project-20/install/include
 INCLUDES := -I $(MLIR_INCLUDE)
 
 # Dialect library sources
-DIALECT_SOURCES := c_api.cpp ConvertToLLVM.cpp Sum.cpp SumOps.cpp SumTypes.cpp
+DIALECT_SOURCES := c_api.cpp ConvertToLLVM.cpp ConvertToSCF.cpp Sum.cpp SumOps.cpp SumTypes.cpp
 DIALECT_OBJECTS := $(DIALECT_SOURCES:.cpp=.o)
 
 # Generated files

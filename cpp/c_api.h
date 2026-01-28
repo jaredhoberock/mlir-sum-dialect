@@ -24,6 +24,8 @@ MlirOperation sumTagOpCreate(MlirLocation, MlirValue input);
 
 MlirOperation sumYieldOpCreate(MlirLocation loc, const MlirValue *results, intptr_t nResults);
 
+MlirPass sumCreateConvertToSCFPass();
+
 #ifdef __cplusplus
 }
 #endif

@@ -164,83 +164,6 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
   }
 };
 
-struct MatchOpLowering : OpConversionPattern<MatchOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(MatchOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    // lowers sum.match to:
-    // 1. spill input struct to alloca
-    // 2. load tag, convert to index
-    // 3. scf.index_switch on tag
-    // 4. each case: load payload, execute case body, yield result
-
-    auto loc = op.getLoc();
-    auto sumTy = cast<SumType>(op.getInput().getType());
-
-    auto viewOrFail = getLoweredSumView(
-        loc, adaptor.getInput(), sumTy, *getTypeConverter(), rewriter);
-    if (failed(viewOrFail))
-      return op.emitError() << "cannot lower sum type to LLVM: " << sumTy;
-    auto view = *viewOrFail;
-
-    auto variants = sumTy.getVariants();
-
-    // build case values: 0, 1, ..., N-2 (last variant goes in default)
-    SmallVector<int64_t> caseValues;
-    for (size_t i = 0; i + 1 < variants.size(); ++i)
-      caseValues.push_back(i);
-
-    // result types
-    SmallVector<Type> resultTypes;
-    for (Type resultType : op.getResultTypes())
-      resultTypes.push_back(getTypeConverter()->convertType(resultType));
-
-    // create scf.index_switch
-    auto switchOp = rewriter.create<scf::IndexSwitchOp>(
-        loc, resultTypes, view.tagIndex, caseValues, caseValues.size());
-
-    // fill each case region
-    for (size_t i = 0; i < variants.size(); ++i) {
-      PatternRewriter::InsertionGuard guard(rewriter);
-
-      Region &tgtRegion = (i < variants.size() - 1)
-          ? switchOp.getCaseRegions()[i]
-          : switchOp.getDefaultRegion();
-      Region &srcRegion = op.getCases()[i];
-
-      // create entry block in target region
-      Block *entryBlock = rewriter.createBlock(&tgtRegion);
-      rewriter.setInsertionPointToStart(entryBlock);
-
-      // load payload at start of target region
-      Type variantLLVMTy = getTypeConverter()->convertType(variants[i]);
-      Value payload = rewriter.create<LLVM::LoadOp>(loc, variantLLVMTy, view.payloadPtr);
-
-      // inline the source region after our entry block
-      rewriter.inlineRegionBefore(srcRegion, tgtRegion, tgtRegion.end());
-
-      // merge the inlined block into entry block, replacing block arg with payload
-      auto secondBlock = std::next(tgtRegion.begin());
-      rewriter.mergeBlocks(&*secondBlock, entryBlock, {payload});
-
-      // convert region types
-      if (failed(rewriter.convertRegionTypes(&tgtRegion, *getTypeConverter())))
-        return rewriter.notifyMatchFailure(op, "region type conversion failed");
-
-      // replace sum.yield to scf.yield
-      auto oldYield = dyn_cast<YieldOp>(tgtRegion.back().getTerminator());
-      if (not oldYield)
-        return rewriter.notifyMatchFailure(op, "failed to find sum.yield");
-      rewriter.replaceOpWithNewOp<scf::YieldOp>(oldYield, oldYield.getResults());
-    }
-
-    rewriter.replaceOp(op, switchOp.getResults());
-    return success();
-  }
-};
-
 struct TagOpLowering : OpConversionPattern<TagOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -292,12 +215,8 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
     GetOpLowering,
     IsVariantOpLowering,
     MakeOpLowering,
-    MatchOpLowering,
     TagOpLowering
   >(typeConverter, patterns.getContext());
-
-  // include conversion patterns for scf.index_switch
-  populateSCFToControlFlowConversionPatterns(patterns);
 }
 
 } // end mlir::sum

@@ -31,6 +31,14 @@ def GetOp : SumDialectOp<"get", [Pure]> {
 
   let hasVerifier = 1;
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input)) `->` type($payload)";
+
+  let builders = [
+    OpBuilder<(ins "Value":$input, "int64_t":$index), [{
+      auto sumTy = cast<SumType>(input.getType());
+      Type resultType = sumTy.getVariants()[index];
+      build($_builder, $_state, resultType, input, $_builder.getIndexAttr(index));
+    }]>
+  ];
 }
 
 def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {

@@ -1,8 +1,8 @@
 use melior::{
     ir::{r#type::TypeLike, Location, Operation, Type, Value, ValueLike},
-    Context,
+    pass::Pass, Context, 
 };
-use mlir_sys::{MlirContext, MlirLocation, MlirOperation, MlirType, MlirValue};
+use mlir_sys::{MlirContext, MlirLocation, MlirOperation, MlirPass, MlirType, MlirValue};
 
 #[link(name = "sum_dialect")]
 unsafe extern "C" {
@@ -14,6 +14,7 @@ unsafe extern "C" {
     fn sumMatchOpCreate(loc: MlirLocation, input: MlirValue, resultTypes: *const MlirType, nResults: isize) -> MlirOperation;
     fn sumTagOpCreate(loc: MlirLocation, input: MlirValue) -> MlirOperation;
     fn sumYieldOpCreate(loc: MlirLocation, results: *const MlirValue, nResults: isize) -> MlirOperation;
+    fn sumCreateConvertToSCFPass() -> MlirPass;
 }
 
 pub fn register(context: &Context) {
@@ -119,4 +120,8 @@ pub fn yield_<'c>(
         );
         Operation::from_raw(op)
     }
+}
+
+pub fn create_convert_to_scf_pass() -> Pass {
+    unsafe { Pass::from_raw(sumCreateConvertToSCFPass()) }
 }

@@ -1,4 +1,4 @@
-// RUN: mlir-opt --pass-pipeline="builtin.module(convert-to-llvm)" %s | FileCheck %s
+// RUN: mlir-opt --pass-pipeline="builtin.module(convert-sum-to-scf,convert-scf-to-cf,convert-to-llvm)" %s | FileCheck %s
 
 // ---- Test 1: match with result ----
 // CHECK-LABEL: llvm.func @match_with_result
