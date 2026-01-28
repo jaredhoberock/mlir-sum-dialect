@@ -8,8 +8,10 @@ use mlir_sys::{MlirContext, MlirLocation, MlirOperation, MlirType, MlirValue};
 unsafe extern "C" {
     fn sumRegisterDialect(ctx: MlirContext);
     fn sumSumTypeCreate(ctx: MlirContext, variants: *const MlirType, nVariants: isize) -> MlirType;
+    fn sumGetOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
     fn sumMakeOpCreate(loc: MlirLocation, resultTy: MlirType, index: i64, payload: MlirValue) -> MlirOperation;
     fn sumMatchOpCreate(loc: MlirLocation, input: MlirValue, resultTypes: *const MlirType, nResults: isize) -> MlirOperation;
+    fn sumTagOpCreate(loc: MlirLocation, input: MlirValue) -> MlirOperation;
     fn sumYieldOpCreate(loc: MlirLocation, results: *const MlirValue, nResults: isize) -> MlirOperation;
 }
 
@@ -25,6 +27,21 @@ pub fn sum_type<'c>(context: &'c Context, variants: &[Type<'c>]) -> Type<'c> {
             variants.len() as isize,
         );
         Type::from_raw(raw)
+    }
+}
+
+pub fn get<'c>(
+    loc: Location<'c>,
+    input: Value<'c, '_>,
+    index: usize,
+) -> Operation<'c> {
+    unsafe {
+        let op = sumGetOpCreate(
+            loc.to_raw(),
+            input.to_raw(),
+            index as i64,
+        );
+        Operation::from_raw(op)
     }
 }
 
@@ -56,6 +73,19 @@ pub fn match_<'c>(
             input.to_raw(),
             result_types.as_ptr() as *const _,
             result_types.len() as isize,
+        );
+        Operation::from_raw(op)
+    }
+}
+
+pub fn tag<'c>(
+    loc: Location<'c>,
+    input: Value<'c, '_>,
+) -> Operation<'c> {
+    unsafe {
+        let op = sumTagOpCreate(
+            loc.to_raw(),
+            input.to_raw(),
         );
         Operation::from_raw(op)
     }

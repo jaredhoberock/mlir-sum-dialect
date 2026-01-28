@@ -8,6 +8,34 @@
 
 namespace mlir::sum {
 
+//===----------------------------------------------------------------------===//
+// GetOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult GetOp::verify() {
+  auto sumTy = dyn_cast<SumType>(getInput().getType());
+  if (!sumTy)
+    return emitOpError("expected operand to be !sum.sum<...>");
+
+  auto variants = sumTy.getVariants();
+  if (variants.empty())
+    return emitOpError("cannot get payload from sum type with zero variants");
+
+  uint64_t idx = getIndex().getZExtValue();
+  if (idx >= variants.size())
+    return emitOpError("index ")
+           << idx << " out of range for !sum.sum with "
+           << variants.size() << " variants";
+
+  Type expectedTy = variants[idx];
+  Type actualTy = getPayload().getType();
+  if (actualTy != expectedTy)
+    return emitOpError("result type ")
+           << actualTy << " does not match variant " << idx
+           << " payload type " << expectedTy;
+
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // MakeOp
@@ -188,6 +216,21 @@ LogicalResult MatchOp::verify() {
                                     << matchResult.getType();
     }
   }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// TagOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult TagOp::verify() {
+  auto sumTy = dyn_cast<SumType>(getInput().getType());
+  if (!sumTy)
+    return emitOpError("expected sum type operand");
+
+  if (sumTy.getVariants().empty())
+    return emitOpError("cannot take tag of !sum.sum<()> (zero-variant sum)");
 
   return success();
 }

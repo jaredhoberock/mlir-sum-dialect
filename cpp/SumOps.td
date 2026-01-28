@@ -8,6 +8,31 @@ include "mlir/IR/OpBase.td"
 include "Sum.td"
 include "SumTypes.td"
 
+def GetOp : SumDialectOp<"get", [Pure]> {
+  let summary = "Extract the payload of a sum value (unchecked)";
+  let description = [{
+    Extracts the payload stored in a sum value.
+
+    This op does not check that the sum's active tag matches the requested
+    variant index. It is intended to be used only when control flow already
+    guarantees the variant (e.g. inside a matching arm).
+
+    Example:
+
+        %payload = sum.get %x, 0 : !sum.sum<(i64, i1)> -> i64
+  }];
+
+  let arguments = (ins
+    SumType:$input,
+    IndexAttr:$index
+  );
+
+  let results = (outs AnyType:$payload);
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input)) `->` type($payload)";
+}
+
 def MakeOp : SumDialectOp<"make", [Pure]> {
   let summary = "Construct a sum type variant";
   let description = [{
@@ -69,6 +94,29 @@ def MatchOp : SumDialectOp<"match", [
     /// Allow the dialect prefix to be omitted.
     static StringRef getDefaultDialect() { return "sum"; }
   }];
+}
+
+def TagOp : SumDialectOp<"tag", [Pure]> {
+  let summary = "Get the active variant index (discriminant) of a sum value";
+  let description = [{
+    Returns the index of the active variant of a sum value.
+
+    Example:
+
+        %tag = sum.tag %x : !sum.sum<(i64, tuple<>)> -> index
+  }];
+
+  let arguments = (ins SumType:$input);
+  let results = (outs Index:$tag);
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
+
+  let builders = [
+    OpBuilder<(ins "Value":$input), [{
+      build($_builder, $_state, $_builder.getIndexType(), input);
+    }]>
+  ];
 }
 
 def YieldOp : SumDialectOp<"yield", [
