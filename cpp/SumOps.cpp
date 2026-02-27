@@ -2,6 +2,7 @@
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
 #include "SumTypes.hpp"
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinTypes.h>
 
@@ -61,6 +62,17 @@ LogicalResult IsVariantOp::verify() {
   }
 
   return success();
+}
+
+OpFoldResult IsVariantOp::fold(FoldAdaptor adaptor) {
+  auto makeOp = getInput().getDefiningOp<MakeOp>();
+  if (!makeOp)
+    return {};
+
+  bool match = makeOp.getIndex() == getIndex();
+  OpBuilder builder(getContext());
+  builder.setInsertionPoint(getOperation());
+  return builder.create<arith::ConstantOp>(getLoc(), builder.getBoolAttr(match)).getResult();
 }
 
 //===----------------------------------------------------------------------===//

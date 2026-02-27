@@ -62,8 +62,9 @@ def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
   let results = (outs I1:$result);
   
   let hasVerifier = 1;
+  let hasFolder = 1;
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input))";
-  
+
   let builders = [
     OpBuilder<(ins "Value":$input, "int64_t":$index), [{
       build($_builder, $_state, $_builder.getI1Type(), input, $_builder.getIndexAttr(index));
