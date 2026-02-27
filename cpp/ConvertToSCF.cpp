@@ -1,6 +1,7 @@
 #include "ConvertToSCF.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
+#include "SumTypeInterface.hpp"
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
@@ -12,22 +13,22 @@ struct MatchOpLowering : OpRewritePattern<MatchOp> {
   LogicalResult
   matchAndRewrite(MatchOp op, PatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto sumTy = cast<SumType>(op.getInput().getType());
-    auto variants = sumTy.getVariants();
+    auto sumTy = cast<SumTypeInterface>(op.getInput().getType());
+    size_t numVariants = sumTy.getNumVariants();
 
     // Get tag
     Value tag = rewriter.create<TagOp>(loc, op.getInput());
 
     // Build case values: 0, 1, ..., N-2 (last goes in default)
     SmallVector<int64_t> caseValues;
-    for (size_t i = 0; i + 1 < variants.size(); ++i)
+    for (size_t i = 0; i + 1 < numVariants; ++i)
       caseValues.push_back(i);
 
     auto switchOp = rewriter.create<scf::IndexSwitchOp>(
         loc, op.getResultTypes(), tag, caseValues, caseValues.size());
 
-    for (size_t i = 0; i < variants.size(); ++i) {
-      Region &tgtRegion = (i < variants.size() - 1)
+    for (size_t i = 0; i < numVariants; ++i) {
+      Region &tgtRegion = (i < numVariants - 1)
           ? switchOp.getCaseRegions()[i]
           : switchOp.getDefaultRegion();
       Region &srcRegion = op.getCases()[i];

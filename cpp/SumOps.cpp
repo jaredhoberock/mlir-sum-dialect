@@ -1,5 +1,6 @@
 #include "Sum.hpp"
 #include "SumOps.hpp"
+#include "SumTypeInterface.hpp"
 #include "SumTypes.hpp"
 #include <mlir/IR/Builders.h>
 
@@ -13,21 +14,21 @@ namespace mlir::sum {
 //===----------------------------------------------------------------------===//
 
 LogicalResult GetOp::verify() {
-  auto sumTy = dyn_cast<SumType>(getInput().getType());
+  auto sumTy = dyn_cast<SumTypeInterface>(getInput().getType());
   if (!sumTy)
-    return emitOpError("expected operand to be !sum.sum<...>");
+    return emitOpError("expected operand to implement SumTypeInterface");
 
-  auto variants = sumTy.getVariants();
-  if (variants.empty())
+  size_t numVariants = sumTy.getNumVariants();
+  if (numVariants == 0)
     return emitOpError("cannot get payload from sum type with zero variants");
 
   uint64_t idx = getIndex().getZExtValue();
-  if (idx >= variants.size())
+  if (idx >= numVariants)
     return emitOpError("index ")
-           << idx << " out of range for !sum.sum with "
-           << variants.size() << " variants";
+           << idx << " out of range for sum type with "
+           << numVariants << " variants";
 
-  Type expectedTy = variants[idx];
+  Type expectedTy = sumTy.getVariantType(idx);
   Type actualTy = getPayload().getType();
   if (actualTy != expectedTy)
     return emitOpError("result type ")
@@ -42,16 +43,16 @@ LogicalResult GetOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult IsVariantOp::verify() {
-  auto sumType = llvm::cast<SumType>(getInput().getType());
+  auto sumType = llvm::cast<SumTypeInterface>(getInput().getType());
   int64_t index = getIndex().getZExtValue();
-  int64_t numVariants = sumType.getVariants().size();
-  
+  int64_t numVariants = sumType.getNumVariants();
+
   if (index < 0 || index >= numVariants) {
     return emitOpError("variant index ")
            << index << " is out of bounds for sum type with "
            << numVariants << " variants";
   }
-  
+
   return success();
 }
 
@@ -60,15 +61,15 @@ LogicalResult IsVariantOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult MakeOp::verify() {
-  auto sumType = cast<SumType>(getResult().getType());
-  auto variants = sumType.getVariants();
+  auto sumType = cast<SumTypeInterface>(getResult().getType());
+  size_t numVariants = sumType.getNumVariants();
   uint64_t index = getIndex().getZExtValue();
 
-  if (index >= variants.size())
-    return emitOpError("variant index ") << index << " is out of bounds for sum type with " << variants.size() << " variants";
+  if (index >= numVariants)
+    return emitOpError("variant index ") << index << " is out of bounds for sum type with " << numVariants << " variants";
 
-  if (getPayload().getType() != variants[index])
-    return emitOpError("payload type ") << getPayload().getType() << " does not match variant type " << variants[index];
+  if (getPayload().getType() != sumType.getVariantType(index))
+    return emitOpError("payload type ") << getPayload().getType() << " does not match variant type " << sumType.getVariantType(index);
 
   return success();
 }
@@ -78,28 +79,32 @@ ParseResult MakeOp::parse(OpAsmParser &parser, OperationState &result) {
   //   sum.make 0 %val : !sum.sum<(i64, tuple<>)>
 
   OpAsmParser::UnresolvedOperand payload;
-  SumType resultType;
+  Type parsedType;
 
   // Parse index as an integer, then convert to index type
   int64_t index;
   if (parser.parseInteger(index) ||
       parser.parseOperand(payload) ||
       parser.parseColon() ||
-      parser.parseCustomTypeWithFallback(resultType))
+      parser.parseType(parsedType))
     return failure();
+
+  auto resultType = dyn_cast<SumTypeInterface>(parsedType);
+  if (!resultType)
+    return parser.emitError(parser.getNameLoc(), "expected type implementing SumTypeInterface");
 
   // Create index attribute with index type
   auto indexType = parser.getBuilder().getIndexType();
   result.addAttribute("index", parser.getBuilder().getIntegerAttr(indexType, index));
 
-  auto variants = resultType.getVariants();
-  if (index >= variants.size())
+  size_t numVariants = resultType.getNumVariants();
+  if (index >= (int64_t)numVariants)
     return parser.emitError(parser.getNameLoc(), "variant index out of bounds");
 
-  if (parser.resolveOperand(payload, variants[index], result.operands))
+  if (parser.resolveOperand(payload, resultType.getVariantType(index), result.operands))
     return failure();
 
-  result.addTypes(resultType);
+  result.addTypes(parsedType);
   return success();
 }
 
@@ -124,14 +129,20 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
   // }
 
   OpAsmParser::UnresolvedOperand input;
-  SumType inputType;
+  Type parsedType;
   Type resultType;
 
-  // Parse: %x : !sum.sum<...>
+  // Parse: %x : <type>
   if (parser.parseOperand(input) ||
       parser.parseColon() ||
-      parser.parseCustomTypeWithFallback(inputType) ||
-      parser.resolveOperand(input, inputType, result.operands))
+      parser.parseType(parsedType))
+    return failure();
+
+  auto inputType = dyn_cast<SumTypeInterface>(parsedType);
+  if (!inputType)
+    return parser.emitError(parser.getNameLoc(), "expected type implementing SumTypeInterface");
+
+  if (parser.resolveOperand(input, parsedType, result.operands))
     return failure();
 
   // Parse optional: -> resultType
@@ -142,16 +153,16 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
   }
 
   // Parse cases
-  auto variants = inputType.getVariants();
-  for (size_t i = 0; i < variants.size(); ++i) {
+  size_t numVariants = inputType.getNumVariants();
+  for (size_t i = 0; i < numVariants; ++i) {
     // Parse: case N
     if (parser.parseKeyword("case"))
       return failure();
-    
+
     int64_t caseIndex;
     if (parser.parseInteger(caseIndex))
       return failure();
-    
+
     if (caseIndex != (int64_t)i)
       return parser.emitError(parser.getCurrentLocation(),
                                "expected case ") << i << ", got " << caseIndex;
@@ -165,7 +176,7 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
     if (args.size() != 1)
       return parser.emitError(parser.getCurrentLocation(),
                                "expected exactly one argument for case ") << i;
-    if (args[0].type != variants[i])
+    if (args[0].type != inputType.getVariantType(i))
       return parser.emitError(parser.getCurrentLocation(),
                                "argument type mismatch for case ") << i;
 
@@ -173,7 +184,7 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
     Region *caseRegion = result.addRegion();
     if (parser.parseRegion(*caseRegion, args))
       return failure();
-    
+
     // Ensure terminator
     MatchOp::ensureTerminator(*caseRegion, parser.getBuilder(),
                                result.location);
@@ -198,25 +209,25 @@ void MatchOp::print(OpAsmPrinter &p) {
 }
 
 LogicalResult MatchOp::verify() {
-  auto sumType = cast<SumType>(getInput().getType());
-  auto variants = sumType.getVariants();
+  auto sumType = cast<SumTypeInterface>(getInput().getType());
+  size_t numVariants = sumType.getNumVariants();
 
   // Check number of cases matches number of variants
-  if (getCases().size() != variants.size())
-    return emitOpError("expected ") << variants.size() << " cases, got " << getCases().size();
+  if (getCases().size() != numVariants)
+    return emitOpError("expected ") << numVariants << " cases, got " << getCases().size();
 
   // Check each case
   for (auto [i, caseRegion] : llvm::enumerate(getCases())) {
     Block &block = caseRegion.front();
-    
+
     // Check block has exactly one argument
     if (block.getNumArguments() != 1)
       return emitOpError("case ") << i << " expected 1 argument, got " << block.getNumArguments();
-    
+
     // Check argument type matches variant
-    if (block.getArgument(0).getType() != variants[i])
+    if (block.getArgument(0).getType() != sumType.getVariantType(i))
       return emitOpError("case ") << i << " argument type " << block.getArgument(0).getType()
-                                  << " does not match variant type " << variants[i];
+                                  << " does not match variant type " << sumType.getVariantType(i);
     
     auto yield = cast<YieldOp>(block.getTerminator());
 
@@ -243,12 +254,12 @@ LogicalResult MatchOp::verify() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult TagOp::verify() {
-  auto sumTy = dyn_cast<SumType>(getInput().getType());
+  auto sumTy = dyn_cast<SumTypeInterface>(getInput().getType());
   if (!sumTy)
-    return emitOpError("expected sum type operand");
+    return emitOpError("expected operand to implement SumTypeInterface");
 
-  if (sumTy.getVariants().empty())
-    return emitOpError("cannot take tag of !sum.sum<()> (zero-variant sum)");
+  if (sumTy.getNumVariants() == 0)
+    return emitOpError("cannot take tag of zero-variant sum type");
 
   return success();
 }

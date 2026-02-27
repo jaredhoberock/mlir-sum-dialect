@@ -14,11 +14,11 @@ MLIR_INCLUDE = /home/jhoberock/dev/git/llvm-project-20/install/include
 INCLUDES := -I $(MLIR_INCLUDE)
 
 # Dialect library sources
-DIALECT_SOURCES := c_api.cpp ConvertToLLVM.cpp ConvertToSCF.cpp Sum.cpp SumOps.cpp SumTypes.cpp
+DIALECT_SOURCES := c_api.cpp ConvertToLLVM.cpp ConvertToSCF.cpp Sum.cpp SumOps.cpp SumTypeInterface.cpp SumTypes.cpp
 DIALECT_OBJECTS := $(DIALECT_SOURCES:.cpp=.o)
 
 # Generated files
-GENERATED := Sum.hpp.inc Sum.cpp.inc SumOps.hpp.inc SumOps.cpp.inc SumTypes.hpp.inc SumTypes.cpp.inc
+GENERATED := Sum.hpp.inc Sum.cpp.inc SumOps.hpp.inc SumOps.cpp.inc SumTypeInterface.hpp.inc SumTypeInterface.cpp.inc SumTypes.hpp.inc SumTypes.cpp.inc
 
 .PHONY: all clean
 
@@ -31,16 +31,22 @@ Sum.hpp.inc: Sum.td
 Sum.cpp.inc: Sum.td
 	$(TBLGEN) --gen-dialect-defs $(INCLUDES) $< -o $@
 
-SumOps.hpp.inc: SumOps.td
+SumOps.hpp.inc: SumOps.td SumTypeInterface.td
 	$(TBLGEN) --gen-op-decls $(INCLUDES) $< -o $@
 
-SumOps.cpp.inc: SumOps.td
+SumOps.cpp.inc: SumOps.td SumTypeInterface.td
 	$(TBLGEN) --gen-op-defs $(INCLUDES) $< -o $@
 
-SumTypes.hpp.inc: SumTypes.td
+SumTypeInterface.hpp.inc: SumTypeInterface.td
+	$(TBLGEN) --gen-type-interface-decls $(INCLUDES) $< -o $@
+
+SumTypeInterface.cpp.inc: SumTypeInterface.td
+	$(TBLGEN) --gen-type-interface-defs $(INCLUDES) $< -o $@
+
+SumTypes.hpp.inc: SumTypes.td SumTypeInterface.td
 	$(TBLGEN) --gen-typedef-decls $(INCLUDES) $< -o $@
 
-SumTypes.cpp.inc: SumTypes.td
+SumTypes.cpp.inc: SumTypes.td SumTypeInterface.td
 	$(TBLGEN) --gen-typedef-defs $(INCLUDES) $< -o $@
 
 # Object file rules

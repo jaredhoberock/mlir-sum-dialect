@@ -1,6 +1,7 @@
 #include "ConvertToLLVM.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
+#include "SumTypeInterface.hpp"
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
@@ -10,9 +11,9 @@
 
 namespace mlir::sum {
 
-// helper to get LLVM struct type and tag type from a SumType
+// helper to get LLVM struct type and tag type from a sum-like type
 static FailureOr<std::pair<LLVM::LLVMStructType, IntegerType>>
-getSumLLVMTypes(SumType sumTy, const TypeConverter &tc) {
+getSumLLVMTypes(Type sumTy, const TypeConverter &tc) {
   auto llvmStructTy = dyn_cast_or_null<LLVM::LLVMStructType>(tc.convertType(sumTy));
   if (!llvmStructTy)
     return failure();
@@ -39,7 +40,7 @@ struct LoweredSumView {
 static FailureOr<LoweredSumView>
 getLoweredSumView(Location loc,
                   Value loweredSumValue, // adaptor.getInput()
-                  SumType sumTy,
+                  Type sumTy,
                   const TypeConverter &tc,
                   ConversionPatternRewriter &rewriter) {
   auto typesOrFail = getSumLLVMTypes(sumTy, tc);
@@ -76,12 +77,11 @@ struct GetOpLowering : OpConversionPattern<GetOp> {
   matchAndRewrite(GetOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto sumTy = cast<SumType>(op.getInput().getType());
 
     auto viewOrFail = getLoweredSumView(
-        loc, adaptor.getInput(), sumTy, *getTypeConverter(), rewriter);
+        loc, adaptor.getInput(), op.getInput().getType(), *getTypeConverter(), rewriter);
     if (failed(viewOrFail))
-      return op.emitOpError() << "cannot lower sum type to LLVM: " << sumTy;
+      return op.emitOpError() << "cannot lower sum type to LLVM: " << op.getInput().getType();
 
     Type loweredResultTy = getTypeConverter()->convertType(op.getResult().getType());
     if (!loweredResultTy)
@@ -101,11 +101,11 @@ struct IsVariantOpLowering : OpConversionPattern<IsVariantOp> {
   matchAndRewrite(IsVariantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto sumTy = cast<SumType>(op.getInput().getType());
+    auto inputTy = op.getInput().getType();
 
-    auto typesOrFail = getSumLLVMTypes(sumTy, *getTypeConverter());
+    auto typesOrFail = getSumLLVMTypes(inputTy, *getTypeConverter());
     if (failed(typesOrFail))
-      return op.emitOpError() << "cannot lower sum type to LLVM: " << sumTy;
+      return op.emitOpError() << "cannot lower sum type to LLVM: " << inputTy;
     auto [llvmStructTy, tagTy] = *typesOrFail;
 
     // Extract tag from struct value
@@ -132,11 +132,11 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
   matchAndRewrite(MakeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto sumTy = cast<SumType>(op.getResult().getType());
+    auto resultTy = op.getResult().getType();
 
-    auto typesOrFail = getSumLLVMTypes(sumTy, *getTypeConverter());
+    auto typesOrFail = getSumLLVMTypes(resultTy, *getTypeConverter());
     if (failed(typesOrFail))
-      return op.emitError() << "cannot lower sum type to LLVM: " << sumTy;
+      return op.emitError() << "cannot lower sum type to LLVM: " << resultTy;
     auto [llvmStructTy, tagTy] = *typesOrFail;
 
     auto ptrTy = LLVM::LLVMPointerType::get(getContext());
@@ -171,10 +171,10 @@ struct TagOpLowering : OpConversionPattern<TagOp> {
   matchAndRewrite(TagOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    auto sumTy = cast<SumType>(op.getInput().getType());
+    auto inputTy = op.getInput().getType();
 
-    if (failed(getSumLLVMTypes(sumTy, *getTypeConverter())))
-      return op.emitOpError() << "cannot lower sum type to LLVM: " << sumTy;
+    if (failed(getSumLLVMTypes(inputTy, *getTypeConverter())))
+      return op.emitOpError() << "cannot lower sum type to LLVM: " << inputTy;
 
     // Extract tag from struct value
     Value tag = rewriter.create<LLVM::ExtractValueOp>(loc, adaptor.getInput(), 0);

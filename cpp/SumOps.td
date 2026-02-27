@@ -7,6 +7,11 @@ include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/OpBase.td"
 include "Sum.td"
 include "SumTypes.td"
+include "SumTypeInterface.td"
+
+def IsSumTypeInterface : Type<
+  CPred<"::llvm::isa<::mlir::sum::SumTypeInterface>($_self)">,
+  "type that implements SumTypeInterface">;
 
 def GetOp : SumDialectOp<"get", [Pure]> {
   let summary = "Extract the payload of a sum value (unchecked)";
@@ -23,7 +28,7 @@ def GetOp : SumDialectOp<"get", [Pure]> {
   }];
 
   let arguments = (ins
-    SumType:$input,
+    IsSumTypeInterface:$input,
     IndexAttr:$index
   );
 
@@ -34,8 +39,8 @@ def GetOp : SumDialectOp<"get", [Pure]> {
 
   let builders = [
     OpBuilder<(ins "Value":$input, "int64_t":$index), [{
-      auto sumTy = cast<SumType>(input.getType());
-      Type resultType = sumTy.getVariants()[index];
+      auto sumTy = cast<SumTypeInterface>(input.getType());
+      Type resultType = sumTy.getVariantType(index);
       build($_builder, $_state, resultType, input, $_builder.getIndexAttr(index));
     }]>
   ];
@@ -51,7 +56,7 @@ def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
   }];
   
   let arguments = (ins
-    SumType:$input,
+    IsSumTypeInterface:$input,
     IndexAttr:$index
   );
   let results = (outs I1:$result);
@@ -83,7 +88,7 @@ def MakeOp : SumDialectOp<"make", [Pure]> {
     AnyType:$payload
   );
 
-  let results = (outs SumType:$result);
+  let results = (outs IsSumTypeInterface:$result);
 
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
@@ -111,7 +116,7 @@ def MatchOp : SumDialectOp<"match", [
         }
   }];
 
-  let arguments = (ins SumType:$input);
+  let arguments = (ins IsSumTypeInterface:$input);
   let results = (outs Variadic<AnyType>:$results);
   let regions = (region VariadicRegion<SizedRegion<1>>:$cases);
 
@@ -139,7 +144,7 @@ def TagOp : SumDialectOp<"tag", [Pure]> {
         %tag = sum.tag %x : !sum.sum<(i64, tuple<>)> -> index
   }];
 
-  let arguments = (ins SumType:$input);
+  let arguments = (ins IsSumTypeInterface:$input);
   let results = (outs Index:$tag);
 
   let hasVerifier = 1;
