@@ -6,7 +6,7 @@ include "Sum.td"
 include "SumTypeInterface.td"
 
 def SumType : TypeDef<SumDialect, "Sum", [
-  DeclareTypeInterfaceMethods<SumTypeInterface>
+  SumTypeInterface
 ]> {
   let mnemonic = "sum";
   let summary = "A sum type (tagged union) with indexed variants";

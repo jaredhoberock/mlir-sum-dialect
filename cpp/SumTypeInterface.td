@@ -10,10 +10,16 @@ def SumTypeInterface : TypeInterface<"SumTypeInterface"> {
                     "bool", "implementsInterface", (ins), /*methodBody=*/[{}],
                     /*defaultImplementation=*/[{ return true; }]>,
     InterfaceMethod<"Return the number of variants",
-                    "size_t", "getNumVariants">,
+                    "size_t", "getNumVariants", (ins), /*methodBody=*/[{}],
+                    /*defaultImplementation=*/[{
+                      return $_type.getVariants().size();
+                    }]>,
     InterfaceMethod<"Return the payload type of variant at index",
                     "::mlir::Type", "getVariantType",
-                    (ins "size_t":$index)>,
+                    (ins "size_t":$index), /*methodBody=*/[{}],
+                    /*defaultImplementation=*/[{
+                      return $_type.getVariants()[index];
+                    }]>,
   ];
 
   let extraClassOf = [{

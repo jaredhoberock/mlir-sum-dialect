@@ -2,6 +2,7 @@
 #include "ConvertToSCF.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
+#include "SumTypeInterface.hpp"
 #include "SumTypes.hpp"
 #include <mlir/CAPI/IR.h>
 #include <mlir/CAPI/Pass.h>
@@ -27,25 +28,8 @@ MlirType sumSumTypeCreate(MlirContext ctx, const MlirType *wrappedVariants, intp
 
 MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
   OpBuilder builder(unwrap(loc)->getContext());
-
-  Value inputVal = unwrap(input);
-  auto sumTy = dyn_cast<SumType>(inputVal.getType());
-  if (!sumTy)
-    return {};
-
-  auto variants = sumTy.getVariants();
-  if (index < 0 || static_cast<size_t>(index) >= variants.size())
-    return {};
-
-  Type resultTy = variants[static_cast<size_t>(index)];
-  auto indexAttr = builder.getIndexAttr(index);
-
-  OperationState state(unwrap(loc), GetOp::getOperationName());
-  state.addOperands(inputVal);
-  state.addTypes(resultTy);
-  state.addAttribute("index", indexAttr);
-
-  return wrap(builder.create(state));
+  auto op = builder.create<GetOp>(unwrap(loc), unwrap(input), index);
+  return wrap(op.getOperation());
 }
 
 MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
@@ -60,7 +44,7 @@ MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index
   Value payloadVal = payload.ptr ? unwrap(payload) : Value();
   auto op = builder.create<MakeOp>(
     unwrap(loc),
-    cast<SumType>(unwrap(resultTy)),
+    unwrap(resultTy),
     indexAttr,
     payloadVal
   );
@@ -69,26 +53,24 @@ MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index
 
 MlirOperation sumMatchOpCreate(MlirLocation loc, MlirValue input, const MlirType *resultTypes, intptr_t nResults) {
   OpBuilder builder(unwrap(loc).getContext());
-  
+
   auto inputValue = unwrap(input);
-  auto sumType = dyn_cast<SumType>(inputValue.getType());
-  if (!sumType) return {};
-  auto variants = sumType.getVariants();
-  
+  auto sumTy = cast<SumTypeInterface>(inputValue.getType());
+
   SmallVector<Type> results;
   for (intptr_t i = 0; i < nResults; ++i) {
     results.push_back(unwrap(resultTypes[i]));
   }
-  
+
   OperationState state(unwrap(loc), MatchOp::getOperationName());
   state.addOperands(inputValue);
   state.addTypes(results);
-  
+
   // Add empty regions, one per variant
-  for (size_t i = 0; i < variants.size(); ++i) {
+  for (size_t i = 0; i < sumTy.getNumVariants(); ++i) {
     state.addRegion();
   }
-  
+
   return wrap(builder.create(state));
 }
 

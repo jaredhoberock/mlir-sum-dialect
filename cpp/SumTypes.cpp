@@ -10,14 +10,6 @@ using namespace mlir::sum;
 #define GET_TYPEDEF_CLASSES
 #include "SumTypes.cpp.inc"
 
-size_t SumType::getNumVariants() const {
-  return getVariants().size();
-}
-
-Type SumType::getVariantType(size_t index) const {
-  return getVariants()[index];
-}
-
 void SumDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST
