@@ -50,9 +50,9 @@ def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
   let summary = "Check if a sum value is a specific variant";
   let description = [{
     Returns true if the sum value's active variant matches the given index.
-    
+
     Example:
-        %is_some = sum.is_variant %x, 0 : !sum.sum<(i64, tuple<>)>
+        %is_first = sum.is_variant %x, 0 : !sum.sum<(i64, i32)>
   }];
   
   let arguments = (ins
@@ -75,23 +75,31 @@ def MakeOp : SumDialectOp<"make", [Pure]> {
   let summary = "Construct a sum type variant";
   let description = [{
     Creates a value of a sum type by specifying which variant to construct
-    and providing the payload value (if any).
+    and providing the payload value (if any). For nullary variants (variant
+    type is NoneType), no payload is provided.
 
     Example:
 
-        %x = sum.make 0 %val : !sum.sum<(i64, tuple<>)>
-        %y = sum.make 1 %unit : !sum.sum<(i64, tuple<>)>
+        %x = sum.make 0 %val : !sum.sum<(i64, none)>
+        %y = sum.make 1 : !sum.sum<(i64, none)>
   }];
 
   let arguments = (ins
     IndexAttr:$index,
-    AnyType:$payload
+    Optional<AnyType>:$payload
   );
 
   let results = (outs IsSumTypeInterface:$result);
 
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+
+  let builders = [
+    OpBuilder<(ins "Type":$resultType, "int64_t":$index), [{
+      build($_builder, $_state, resultType,
+            $_builder.getIndexAttr(index), /*payload=*/Value());
+    }]>
+  ];
 }
 
 def MatchOp : SumDialectOp<"match", [
@@ -103,16 +111,17 @@ def MatchOp : SumDialectOp<"match", [
   let description = [{
     Dispatches to one of several regions based on the sum type's variant.
     Each region receives the variant's payload as block arguments.
+    Nullary variants (variant type is NoneType) have no block arguments.
 
     Example:
 
-        %res = sum.match %x : !sum.sum<(i64, tuple<>)> -> i64
+        %res = sum.match %x : !sum.sum<(i64, none)> -> i64
         case 0 (%inner: i64) {
           yield %inner : i64
         }
-        case 1 (%unit: tuple<>) {
-          %res = arith.constant 7 : i64
-          yield %res : i64
+        case 1 {
+          %c = arith.constant 0 : i64
+          yield %c : i64
         }
   }];
 
@@ -141,7 +150,7 @@ def TagOp : SumDialectOp<"tag", [Pure]> {
 
     Example:
 
-        %tag = sum.tag %x : !sum.sum<(i64, tuple<>)> -> index
+        %tag = sum.tag %x : !sum.sum<(i64, i32)>
   }];
 
   let arguments = (ins IsSumTypeInterface:$input);

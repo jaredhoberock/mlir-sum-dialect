@@ -3,6 +3,7 @@
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
 
 namespace mlir::sum {
@@ -33,18 +34,27 @@ struct MatchOpLowering : OpRewritePattern<MatchOp> {
           : switchOp.getDefaultRegion();
       Region &srcRegion = op.getCases()[i];
 
+      Type variantTy = sumTy.getVariantType(i);
+      bool isNullary = isa<NoneType>(variantTy);
+
       Block *entryBlock = rewriter.createBlock(&tgtRegion);
       rewriter.setInsertionPointToStart(entryBlock);
-
-      // Extract payload with sum.get
-      Value payload = rewriter.create<GetOp>(loc, op.getInput(), i);
 
       // Inline source region
       rewriter.inlineRegionBefore(srcRegion, tgtRegion, tgtRegion.end());
 
-      // Merge, replacing block arg with payload
-      Block *secondBlock = &*std::next(tgtRegion.begin());
-      rewriter.mergeBlocks(secondBlock, entryBlock, {payload});
+      if (isNullary) {
+        // Nullary variant: no payload, no block args to replace
+        Block *secondBlock = &*std::next(tgtRegion.begin());
+        rewriter.mergeBlocks(secondBlock, entryBlock, {});
+      } else {
+        // Extract payload with sum.get
+        Value payload = rewriter.create<GetOp>(loc, op.getInput(), i);
+
+        // Merge, replacing block arg with payload
+        Block *secondBlock = &*std::next(tgtRegion.begin());
+        rewriter.mergeBlocks(secondBlock, entryBlock, {payload});
+      }
 
       // Replace sum.yield with scf.yield
       auto yield = cast<YieldOp>(tgtRegion.back().getTerminator());

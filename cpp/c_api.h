@@ -16,6 +16,7 @@ MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index);
 
 MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t index);
 
+// payload may be {nullptr} for nullary variants
 MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index, MlirValue payload);
 
 MlirOperation sumMatchOpCreate(MlirLocation loc, MlirValue input, const MlirType *resultTypes, intptr_t nResults);

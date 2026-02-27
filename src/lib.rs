@@ -66,14 +66,18 @@ pub fn make<'c>(
     loc: Location<'c>,
     result_ty: Type<'c>,
     index: usize,
-    payload: Value<'c, '_>,
+    payload: Option<Value<'c, '_>>,
 ) -> Operation<'c> {
     unsafe {
+        let raw_payload = match payload {
+            Some(v) => v.to_raw(),
+            None => MlirValue { ptr: std::ptr::null_mut() },
+        };
         let op = sumMakeOpCreate(
             loc.to_raw(),
             result_ty.to_raw(),
             index as i64,
-            payload.to_raw(),
+            raw_payload,
         );
         Operation::from_raw(op)
     }

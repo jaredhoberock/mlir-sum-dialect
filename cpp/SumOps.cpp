@@ -3,6 +3,7 @@
 #include "SumTypeInterface.hpp"
 #include "SumTypes.hpp"
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/BuiltinTypes.h>
 
 #define GET_OP_CLASSES
 #include "SumOps.cpp.inc"
@@ -29,6 +30,12 @@ LogicalResult GetOp::verify() {
            << numVariants << " variants";
 
   Type expectedTy = sumTy.getVariantType(idx);
+
+  // Reject nullary variants
+  if (isa<NoneType>(expectedTy))
+    return emitOpError("cannot extract payload from nullary variant ")
+           << idx;
+
   Type actualTy = getPayload().getType();
   if (actualTy != expectedTy)
     return emitOpError("result type ")
@@ -68,24 +75,40 @@ LogicalResult MakeOp::verify() {
   if (index >= numVariants)
     return emitOpError("variant index ") << index << " is out of bounds for sum type with " << numVariants << " variants";
 
-  if (getPayload().getType() != sumType.getVariantType(index))
-    return emitOpError("payload type ") << getPayload().getType() << " does not match variant type " << sumType.getVariantType(index);
+  Type variantTy = sumType.getVariantType(index);
+  bool isNullary = isa<NoneType>(variantTy);
+
+  if (isNullary) {
+    if (getPayload())
+      return emitOpError("nullary variant ") << index << " must not have a payload";
+  } else {
+    if (!getPayload())
+      return emitOpError("variant ") << index << " requires a payload";
+    if (getPayload().getType() != variantTy)
+      return emitOpError("payload type ") << getPayload().getType() << " does not match variant type " << variantTy;
+  }
 
   return success();
 }
 
 ParseResult MakeOp::parse(OpAsmParser &parser, OperationState &result) {
-  // example:
-  //   sum.make 0 %val : !sum.sum<(i64, tuple<>)>
+  // examples:
+  //   sum.make 0 %val : !sum.sum<(i64, none)>
+  //   sum.make 1 : !sum.sum<(i64, none)>
 
-  OpAsmParser::UnresolvedOperand payload;
   Type parsedType;
 
   // Parse index as an integer, then convert to index type
   int64_t index;
-  if (parser.parseInteger(index) ||
-      parser.parseOperand(payload) ||
-      parser.parseColon() ||
+  if (parser.parseInteger(index))
+    return failure();
+
+  // Try to parse an optional operand (payload)
+  OpAsmParser::UnresolvedOperand payload;
+  auto optResult = parser.parseOptionalOperand(payload);
+  bool hasPayload = optResult.has_value() && succeeded(*optResult);
+
+  if (parser.parseColon() ||
       parser.parseType(parsedType))
     return failure();
 
@@ -101,15 +124,30 @@ ParseResult MakeOp::parse(OpAsmParser &parser, OperationState &result) {
   if (index >= (int64_t)numVariants)
     return parser.emitError(parser.getNameLoc(), "variant index out of bounds");
 
-  if (parser.resolveOperand(payload, resultType.getVariantType(index), result.operands))
-    return failure();
+  Type variantTy = resultType.getVariantType(index);
+  bool isNullary = isa<NoneType>(variantTy);
+
+  if (isNullary) {
+    if (hasPayload)
+      return parser.emitError(parser.getCurrentLocation(),
+                               "nullary variant must not have a payload");
+  } else {
+    if (!hasPayload)
+      return parser.emitError(parser.getCurrentLocation(),
+                               "expected payload operand for non-nullary variant");
+    if (parser.resolveOperand(payload, variantTy, result.operands))
+      return failure();
+  }
 
   result.addTypes(parsedType);
   return success();
 }
 
 void MakeOp::print(OpAsmPrinter &p) {
-  p << ' ' << getIndex() << ' ' << getPayload() << " : " << getResult().getType();
+  p << ' ' << getIndex();
+  if (getPayload())
+    p << ' ' << getPayload();
+  p << " : " << getResult().getType();
 }
 
 
@@ -120,12 +158,13 @@ void MakeOp::print(OpAsmPrinter &p) {
 ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
   // Example:
   //
-  // sum.match %x : !sum.sum<(i64, tuple<>)> -> i64
+  // sum.match %x : !sum.sum<(i64, none)> -> i64
   // case 0 (%inner: i64) {
   //   sum.yield %inner : i64
   // }
-  // case 1 (%unit: tuple<>) {
-  //   sum.yield %default : i64
+  // case 1 {
+  //   %c = arith.constant 0 : i64
+  //   sum.yield %c : i64
   // }
 
   OpAsmParser::UnresolvedOperand input;
@@ -167,18 +206,24 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
       return parser.emitError(parser.getCurrentLocation(),
                                "expected case ") << i << ", got " << caseIndex;
 
-    // Parse: (%arg: type)
-    SmallVector<OpAsmParser::Argument> args;
-    if (parser.parseArgumentList(args, OpAsmParser::Delimiter::Paren, true))
-      return failure();
+    Type variantTy = inputType.getVariantType(i);
+    bool isNullary = isa<NoneType>(variantTy);
 
-    // Verify argument type matches variant
-    if (args.size() != 1)
-      return parser.emitError(parser.getCurrentLocation(),
-                               "expected exactly one argument for case ") << i;
-    if (args[0].type != inputType.getVariantType(i))
-      return parser.emitError(parser.getCurrentLocation(),
-                               "argument type mismatch for case ") << i;
+    SmallVector<OpAsmParser::Argument> args;
+    if (isNullary) {
+      // Nullary variant: no block arguments
+    } else {
+      // Parse: (%arg: type)
+      if (parser.parseArgumentList(args, OpAsmParser::Delimiter::Paren, true))
+        return failure();
+
+      if (args.size() != 1)
+        return parser.emitError(parser.getCurrentLocation(),
+                                 "expected exactly one argument for case ") << i;
+      if (args[0].type != variantTy)
+        return parser.emitError(parser.getCurrentLocation(),
+                                 "argument type mismatch for case ") << i;
+    }
 
     // Parse region body
     Region *caseRegion = result.addRegion();
@@ -195,15 +240,23 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void MatchOp::print(OpAsmPrinter &p) {
   p << ' ' << getInput() << " : " << getInput().getType();
-  
+
   if (getNumResults())
     p << " -> " << getResultTypes();
 
+  auto sumType = cast<SumTypeInterface>(getInput().getType());
   for (auto [i, caseRegion] : llvm::enumerate(getCases())) {
     p.printNewline();
-    p << "case " << i << " (";
-    p.printRegionArgument(caseRegion.getArgument(0));
-    p << ") ";
+    Type variantTy = sumType.getVariantType(i);
+    bool isNullary = isa<NoneType>(variantTy);
+
+    if (isNullary) {
+      p << "case " << i << " ";
+    } else {
+      p << "case " << i << " (";
+      p.printRegionArgument(caseRegion.getArgument(0));
+      p << ") ";
+    }
     p.printRegion(caseRegion, false, true);
   }
 }
@@ -219,16 +272,20 @@ LogicalResult MatchOp::verify() {
   // Check each case
   for (auto [i, caseRegion] : llvm::enumerate(getCases())) {
     Block &block = caseRegion.front();
+    Type variantTy = sumType.getVariantType(i);
+    bool isNullary = isa<NoneType>(variantTy);
 
-    // Check block has exactly one argument
-    if (block.getNumArguments() != 1)
-      return emitOpError("case ") << i << " expected 1 argument, got " << block.getNumArguments();
+    if (isNullary) {
+      if (block.getNumArguments() != 0)
+        return emitOpError("case ") << i << " (nullary) expected 0 arguments, got " << block.getNumArguments();
+    } else {
+      if (block.getNumArguments() != 1)
+        return emitOpError("case ") << i << " expected 1 argument, got " << block.getNumArguments();
+      if (block.getArgument(0).getType() != variantTy)
+        return emitOpError("case ") << i << " argument type " << block.getArgument(0).getType()
+                                    << " does not match variant type " << variantTy;
+    }
 
-    // Check argument type matches variant
-    if (block.getArgument(0).getType() != sumType.getVariantType(i))
-      return emitOpError("case ") << i << " argument type " << block.getArgument(0).getType()
-                                  << " does not match variant type " << sumType.getVariantType(i);
-    
     auto yield = cast<YieldOp>(block.getTerminator());
 
     // Check yield result count matches

@@ -7,6 +7,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Transforms/DialectConversion.h>
 
 namespace mlir::sum {
@@ -152,10 +153,12 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
         loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 0});
     rewriter.create<LLVM::StoreOp>(loc, tag, tagPtr);
 
-    // store payload through typed pointer
-    auto payloadPtr = rewriter.create<LLVM::GEPOp>(
-        loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
-    rewriter.create<LLVM::StoreOp>(loc, adaptor.getPayload(), payloadPtr);
+    // store payload through typed pointer (skip for nullary variants)
+    if (adaptor.getPayload()) {
+      auto payloadPtr = rewriter.create<LLVM::GEPOp>(
+          loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
+      rewriter.create<LLVM::StoreOp>(loc, adaptor.getPayload(), payloadPtr);
+    }
 
     // load result
     auto result = rewriter.create<LLVM::LoadOp>(loc, llvmStructTy, alloca);
@@ -194,6 +197,9 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
     DataLayout layout;
     size_t maxSize = 0;
     for (Type variant : sumTy.getVariants()) {
+      // NoneType means nullary variant — zero size
+      if (isa<NoneType>(variant))
+        continue;
       Type converted = typeConverter.convertType(variant);
       if (!converted)
         return std::nullopt;
