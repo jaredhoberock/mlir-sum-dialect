@@ -18,14 +18,14 @@ struct MatchOpLowering : OpRewritePattern<MatchOp> {
     size_t numVariants = sumTy.getNumVariants();
 
     // Get tag
-    Value tag = rewriter.create<TagOp>(loc, op.getInput());
+    Value tag = TagOp::create(rewriter, loc, op.getInput());
 
     // Build case values: 0, 1, ..., N-2 (last goes in default)
     SmallVector<int64_t> caseValues;
     for (size_t i = 0; i + 1 < numVariants; ++i)
       caseValues.push_back(i);
 
-    auto switchOp = rewriter.create<scf::IndexSwitchOp>(
+    auto switchOp = scf::IndexSwitchOp::create(rewriter, 
         loc, op.getResultTypes(), tag, caseValues, caseValues.size());
 
     for (size_t i = 0; i < numVariants; ++i) {
@@ -49,7 +49,7 @@ struct MatchOpLowering : OpRewritePattern<MatchOp> {
         rewriter.mergeBlocks(secondBlock, entryBlock, {});
       } else {
         // Extract payload with sum.get
-        Value payload = rewriter.create<GetOp>(loc, op.getInput(), i);
+        Value payload = GetOp::create(rewriter, loc, op.getInput(), i);
 
         // Merge, replacing block arg with payload
         Block *secondBlock = &*std::next(tgtRegion.begin());

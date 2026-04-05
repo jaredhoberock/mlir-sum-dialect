@@ -28,13 +28,13 @@ MlirType sumSumTypeCreate(MlirContext ctx, const MlirType *wrappedVariants, intp
 
 MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
   OpBuilder builder(unwrap(loc)->getContext());
-  auto op = builder.create<GetOp>(unwrap(loc), unwrap(input), index);
+  auto op = GetOp::create(builder, unwrap(loc), unwrap(input), index);
   return wrap(op.getOperation());
 }
 
 MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
   OpBuilder builder(unwrap(loc)->getContext());
-  auto op = builder.create<IsVariantOp>(unwrap(loc), unwrap(input), index);
+  auto op = IsVariantOp::create(builder, unwrap(loc), unwrap(input), index);
   return wrap(op.getOperation());
 }
 
@@ -42,7 +42,7 @@ MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index
   OpBuilder builder(unwrap(loc)->getContext());
   auto indexAttr = builder.getIndexAttr(index);
   Value payloadVal = payload.ptr ? unwrap(payload) : Value();
-  auto op = builder.create<MakeOp>(
+  auto op = MakeOp::create(builder, 
     unwrap(loc),
     unwrap(resultTy),
     indexAttr,
@@ -76,7 +76,7 @@ MlirOperation sumMatchOpCreate(MlirLocation loc, MlirValue input, const MlirType
 
 MlirOperation sumTagOpCreate(MlirLocation loc, MlirValue input) {
   OpBuilder builder(unwrap(loc)->getContext());
-  auto op = builder.create<TagOp>(unwrap(loc), unwrap(input));
+  auto op = TagOp::create(builder, unwrap(loc), unwrap(input));
   return wrap(op.getOperation());
 }
 
@@ -88,7 +88,7 @@ MlirOperation sumYieldOpCreate(MlirLocation loc, const MlirValue *results, intpt
     values.push_back(unwrap(results[i]));
   }
   
-  auto op = builder.create<YieldOp>(unwrap(loc), values);
+  auto op = YieldOp::create(builder, unwrap(loc), values);
   return wrap(op.getOperation());
 }
 

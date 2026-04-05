@@ -72,7 +72,7 @@ OpFoldResult IsVariantOp::fold(FoldAdaptor adaptor) {
   bool match = makeOp.getIndex() == getIndex();
   OpBuilder builder(getContext());
   builder.setInsertionPoint(getOperation());
-  return builder.create<arith::ConstantOp>(getLoc(), builder.getBoolAttr(match)).getResult();
+  return arith::ConstantOp::create(builder, getLoc(), builder.getBoolAttr(match)).getResult();
 }
 
 //===----------------------------------------------------------------------===//

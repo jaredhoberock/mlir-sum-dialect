@@ -24,9 +24,9 @@ getSumLLVMTypes(Type sumTy, const TypeConverter &tc) {
 // helper to create an alloca for a single struct instance
 static Value createStructAlloca(Location loc, LLVM::LLVMStructType structTy,
                                 ConversionPatternRewriter &rewriter) {
-  Value one = rewriter.create<LLVM::ConstantOp>(
+  Value one = LLVM::ConstantOp::create(rewriter, 
       loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(1));
-  return rewriter.create<LLVM::AllocaOp>(
+  return LLVM::AllocaOp::create(rewriter, 
       loc, LLVM::LLVMPointerType::get(rewriter.getContext()), structTy, one);
 }
 
@@ -54,18 +54,18 @@ getLoweredSumView(Location loc,
 
   // alloca + store the lowered struct
   Value alloca = createStructAlloca(loc, llvmStructTy, rewriter);
-  rewriter.create<LLVM::StoreOp>(loc, loweredSumValue, alloca);
+  LLVM::StoreOp::create(rewriter, loc, loweredSumValue, alloca);
 
   // tag = load *(gep [0,0])
-  Value tagPtr = rewriter.create<LLVM::GEPOp>(
+  Value tagPtr = LLVM::GEPOp::create(rewriter, 
       loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 0});
-  Value tag = rewriter.create<LLVM::LoadOp>(loc, tagTy, tagPtr);
+  Value tag = LLVM::LoadOp::create(rewriter, loc, tagTy, tagPtr);
 
   // tag integer -> index
-  Value tagIndex = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(), tag);
+  Value tagIndex = arith::IndexCastOp::create(rewriter, loc, rewriter.getIndexType(), tag);
 
   // payloadPtr = gep [0,1]
-  Value payloadPtr = rewriter.create<LLVM::GEPOp>(
+  Value payloadPtr = LLVM::GEPOp::create(rewriter, 
       loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
 
   return LoweredSumView{llvmStructTy, tagTy, alloca, tagIndex, payloadPtr};
@@ -89,7 +89,7 @@ struct GetOpLowering : OpConversionPattern<GetOp> {
       return op.emitOpError() << "cannot lower result type to LLVM: "
                               << op.getResult().getType();
 
-    Value payload = rewriter.create<LLVM::LoadOp>(loc, loweredResultTy, viewOrFail->payloadPtr);
+    Value payload = LLVM::LoadOp::create(rewriter, loc, loweredResultTy, viewOrFail->payloadPtr);
     rewriter.replaceOp(op, payload);
     return success();
   }
@@ -110,15 +110,15 @@ struct IsVariantOpLowering : OpConversionPattern<IsVariantOp> {
     auto [llvmStructTy, tagTy] = *typesOrFail;
 
     // Extract tag from struct value
-    Value tag = rewriter.create<LLVM::ExtractValueOp>(loc, adaptor.getInput(), 0);
+    Value tag = LLVM::ExtractValueOp::create(rewriter, loc, adaptor.getInput(), 0);
 
     // Create constant for expected index
     int64_t index = op.getIndex().getZExtValue();
-    Value expected = rewriter.create<LLVM::ConstantOp>(
+    Value expected = LLVM::ConstantOp::create(rewriter, 
         loc, tagTy, rewriter.getIntegerAttr(tagTy, index));
 
     // Compare tag == expected
-    Value result = rewriter.create<LLVM::ICmpOp>(
+    Value result = LLVM::ICmpOp::create(rewriter, 
         loc, LLVM::ICmpPredicate::eq, tag, expected);
 
     rewriter.replaceOp(op, result);
@@ -147,21 +147,21 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
 
     // store tag
     uint64_t index = op.getIndex().getZExtValue();
-    auto tag = rewriter.create<LLVM::ConstantOp>(
+    auto tag = LLVM::ConstantOp::create(rewriter, 
         loc, tagTy, rewriter.getIntegerAttr(tagTy, index));
-    auto tagPtr = rewriter.create<LLVM::GEPOp>(
+    auto tagPtr = LLVM::GEPOp::create(rewriter, 
         loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 0});
-    rewriter.create<LLVM::StoreOp>(loc, tag, tagPtr);
+    LLVM::StoreOp::create(rewriter, loc, tag, tagPtr);
 
     // store payload through typed pointer (skip for nullary variants)
     if (adaptor.getPayload()) {
-      auto payloadPtr = rewriter.create<LLVM::GEPOp>(
+      auto payloadPtr = LLVM::GEPOp::create(rewriter, 
           loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
-      rewriter.create<LLVM::StoreOp>(loc, adaptor.getPayload(), payloadPtr);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getPayload(), payloadPtr);
     }
 
     // load result
-    auto result = rewriter.create<LLVM::LoadOp>(loc, llvmStructTy, alloca);
+    auto result = LLVM::LoadOp::create(rewriter, loc, llvmStructTy, alloca);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -180,10 +180,10 @@ struct TagOpLowering : OpConversionPattern<TagOp> {
       return op.emitOpError() << "cannot lower sum type to LLVM: " << inputTy;
 
     // Extract tag from struct value
-    Value tag = rewriter.create<LLVM::ExtractValueOp>(loc, adaptor.getInput(), 0);
+    Value tag = LLVM::ExtractValueOp::create(rewriter, loc, adaptor.getInput(), 0);
 
     // tag integer -> index
-    Value tagIndex = rewriter.create<arith::IndexCastOp>(loc, rewriter.getIndexType(), tag);
+    Value tagIndex = arith::IndexCastOp::create(rewriter, loc, rewriter.getIndexType(), tag);
 
     rewriter.replaceOp(op, tagIndex);
     return success();

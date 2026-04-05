@@ -20,6 +20,18 @@ def SumTypeInterface : TypeInterface<"SumTypeInterface"> {
                     /*defaultImplementation=*/[{
                       return $_type.getVariants()[index];
                     }]>,
+    InterfaceMethod<"Extract the payload of a variant from a sum value (unchecked)",
+                    "::mlir::Value", "buildGet",
+                    (ins "::mlir::OpBuilder &":$builder,
+                         "::mlir::Location":$loc,
+                         "::mlir::Value":$sumValue,
+                         "int64_t":$index)>,
+    InterfaceMethod<"Construct a sum value with the given variant and payload",
+                    "::mlir::Value", "buildMake",
+                    (ins "::mlir::OpBuilder &":$builder,
+                         "::mlir::Location":$loc,
+                         "int64_t":$index,
+                         "::mlir::Value":$payload)>,
   ];
 
   let extraClassOf = [{

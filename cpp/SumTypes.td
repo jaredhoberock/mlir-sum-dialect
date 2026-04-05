@@ -24,6 +24,13 @@ def SumType : TypeDef<SumDialect, "Sum", [
   );
 
   let assemblyFormat = "`<` `(` $variants `)` `>`";
+
+  let extraClassDeclaration = [{
+    ::mlir::Value buildGet(::mlir::OpBuilder &builder, ::mlir::Location loc,
+                           ::mlir::Value sumValue, int64_t index) const;
+    ::mlir::Value buildMake(::mlir::OpBuilder &builder, ::mlir::Location loc,
+                            int64_t index, ::mlir::Value payload) const;
+  }];
 }
 
 #endif // SUM_TYPES_TD
