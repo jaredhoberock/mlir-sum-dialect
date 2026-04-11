@@ -2,10 +2,14 @@
 #define SUM_TYPES_TD
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/BuiltinTypeInterfaces.td"
+include "mlir/Interfaces/DataLayoutInterfaces.td"
 include "Sum.td"
 include "SumTypeInterface.td"
 
 def SumType : TypeDef<SumDialect, "Sum", [
+  DataLayoutTypeInterface,
+  MemRefElementTypeInterface,
   SumTypeInterface
 ]> {
   let mnemonic = "sum";
@@ -26,10 +30,21 @@ def SumType : TypeDef<SumDialect, "Sum", [
   let assemblyFormat = "`<` `(` $variants `)` `>`";
 
   let extraClassDeclaration = [{
+    // SumTypeInterface
     ::mlir::Value buildGet(::mlir::OpBuilder &builder, ::mlir::Location loc,
                            ::mlir::Value sumValue, int64_t index) const;
     ::mlir::Value buildMake(::mlir::OpBuilder &builder, ::mlir::Location loc,
                             int64_t index, ::mlir::Value payload) const;
+
+    /// Returns the number of bytes used for the tag (discriminant).
+    /// Minimum 1 byte, rounded up to the next power of two.
+    size_t getSizeOfTagInBytes() const;
+
+    // DataLayoutTypeInterface
+    ::llvm::TypeSize getTypeSizeInBits(const ::mlir::DataLayout &dataLayout,
+                                       ::mlir::DataLayoutEntryListRef params) const;
+    uint64_t getABIAlignment(const ::mlir::DataLayout &dataLayout,
+                             ::mlir::DataLayoutEntryListRef params) const;
   }];
 }
 

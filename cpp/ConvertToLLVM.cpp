@@ -192,28 +192,22 @@ struct TagOpLowering : OpConversionPattern<TagOp> {
 
 void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
                                         RewritePatternSet& patterns) {
+  // !sum.sum<(A, B, ...)> → !llvm.struct<(iN, array<M x i8>)>
+  // where N is the tag width in bits (minimum 8, power-of-two) and
+  // M is the size of the largest variant in bytes. The payload is
+  // stored as a byte array; individual op lowerings bitcast to the
+  // concrete variant type.
   typeConverter.addConversion([&](SumType sumTy) -> std::optional<Type> {
-    // compute the size of the largest variant, after conversion
     DataLayout layout;
-    size_t maxSize = 0;
-    for (Type variant : sumTy.getVariants()) {
-      // NoneType means nullary variant — zero size
-      if (isa<NoneType>(variant))
-        continue;
-      Type converted = typeConverter.convertType(variant);
-      if (!converted)
-        return std::nullopt;
-      maxSize = std::max(maxSize, layout.getTypeSize(converted).getFixedValue());
-    }
+    size_t totalBytes = layout.getTypeSize(sumTy).getFixedValue();
 
-    // compute tag width
-    size_t numVariants = sumTy.getVariants().size();
-    auto tagBits = std::max<std::size_t>(8, llvm::PowerOf2Ceil(llvm::Log2_64_Ceil(numVariants)));
+    size_t tagBytes = sumTy.getSizeOfTagInBytes();
+    size_t payloadBytes = totalBytes - tagBytes;
 
     auto *ctx = sumTy.getContext();
     auto i8Ty = IntegerType::get(ctx, 8);
-    auto tagTy = IntegerType::get(ctx, tagBits);
-    auto payloadTy = LLVM::LLVMArrayType::get(i8Ty, maxSize);
+    auto tagTy = IntegerType::get(ctx, tagBytes * 8);
+    auto payloadTy = LLVM::LLVMArrayType::get(i8Ty, payloadBytes);
     return LLVM::LLVMStructType::getLiteral(ctx, {tagTy, payloadTy});
   });
 
