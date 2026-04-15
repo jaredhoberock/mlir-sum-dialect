@@ -30,12 +30,6 @@ def SumType : TypeDef<SumDialect, "Sum", [
   let assemblyFormat = "`<` `(` $variants `)` `>`";
 
   let extraClassDeclaration = [{
-    // SumTypeInterface
-    ::mlir::Value buildGet(::mlir::OpBuilder &builder, ::mlir::Location loc,
-                           ::mlir::Value sumValue, int64_t index) const;
-    ::mlir::Value buildMake(::mlir::OpBuilder &builder, ::mlir::Location loc,
-                            int64_t index, ::mlir::Value payload) const;
-
     /// Returns the number of bytes used for the tag (discriminant).
     /// Minimum 1 byte, rounded up to the next power of two.
     size_t getSizeOfTagInBytes() const;
