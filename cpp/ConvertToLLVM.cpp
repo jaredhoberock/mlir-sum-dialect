@@ -192,21 +192,24 @@ struct TagOpLowering : OpConversionPattern<TagOp> {
 
 void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
                                         RewritePatternSet& patterns) {
-  // !sum.sum<(A, B, ...)> → !llvm.struct<(iN, array<M x i8>)>
-  // where N is the tag width in bits (minimum 8, power-of-two) and
-  // M is the size of the largest variant in bytes. The payload is
-  // stored as a byte array; individual op lowerings bitcast to the
-  // concrete variant type.
+  // !sum.sum<(A, B, ...)> → !llvm.struct<(iPaddedTag, array<M x i8>)>
+  // Uses SumType's DataLayout to determine total size and alignment.
+  // The tag integer is widened to fill the padding gap so the payload
+  // field starts at the ABI alignment boundary. This keeps the struct
+  // at two fields (tag=0, payload=1) and ensures stores/loads of
+  // variant values through the payload pointer are properly aligned.
   typeConverter.addConversion([&](SumType sumTy) -> std::optional<Type> {
-    DataLayout layout;
-    size_t totalBytes = layout.getTypeSize(sumTy).getFixedValue();
-
-    size_t tagBytes = sumTy.getSizeOfTagInBytes();
-    size_t payloadBytes = totalBytes - tagBytes;
-
     auto *ctx = sumTy.getContext();
     auto i8Ty = IntegerType::get(ctx, 8);
-    auto tagTy = IntegerType::get(ctx, tagBytes * 8);
+
+    DataLayout layout;
+    size_t totalBytes = layout.getTypeSize(sumTy).getFixedValue();
+    size_t abiAlign = layout.getTypeABIAlignment(sumTy);
+    size_t tagBytes = sumTy.getSizeOfTagInBytes();
+    size_t paddedTagBytes = llvm::alignTo(tagBytes, abiAlign);
+    size_t payloadBytes = totalBytes - paddedTagBytes;
+
+    auto tagTy = IntegerType::get(ctx, paddedTagBytes * 8);
     auto payloadTy = LLVM::LLVMArrayType::get(i8Ty, payloadBytes);
     return LLVM::LLVMStructType::getLiteral(ctx, {tagTy, payloadTy});
   });
