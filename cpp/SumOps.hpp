@@ -4,4 +4,4 @@
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 
 #define GET_OP_CLASSES
-#include "SumOps.hpp.inc"
+#include <SumOps.hpp.inc>

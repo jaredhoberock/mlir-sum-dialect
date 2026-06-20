@@ -7,7 +7,7 @@
 #include <mlir/IR/BuiltinTypes.h>
 
 #define GET_OP_CLASSES
-#include "SumOps.cpp.inc"
+#include <SumOps.cpp.inc>
 
 namespace mlir::sum {
 

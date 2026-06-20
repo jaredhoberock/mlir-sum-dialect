@@ -1,3 +1,3 @@
 #include "SumTypeInterface.hpp"
 
-#include "SumTypeInterface.cpp.inc"
+#include <SumTypeInterface.cpp.inc>

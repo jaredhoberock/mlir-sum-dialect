@@ -4,4 +4,4 @@
 #include "SumTypeInterface.hpp"
 
 #define GET_TYPEDEF_CLASSES
-#include "SumTypes.hpp.inc"
+#include <SumTypes.hpp.inc>

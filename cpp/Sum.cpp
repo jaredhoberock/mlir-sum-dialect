@@ -6,7 +6,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 
-#include "Sum.cpp.inc"
+#include <Sum.cpp.inc>
 
 namespace mlir::sum {
 
@@ -23,7 +23,7 @@ struct ConvertToLLVMInterface : public mlir::ConvertToLLVMPatternInterface {
 void SumDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "SumOps.cpp.inc"
+#include <SumOps.cpp.inc>
   >();
 
   registerTypes();
