@@ -31,15 +31,13 @@ void addConvertSumToSCF(MlirOpPassManager pm, void *) {
 
 /// The sum dialect's lowering step converts its match operation to structured
 /// control flow, minting sum.tag and sum.get, so the dialect's op count cannot
-/// witness the claim and the exact operation names it. The step reaches the
-/// serialization boundary, the obligation it carries.
+/// witness the claim and the exact operation names it.
 struct LoweringContribution : lowering::LoweringContributionInterface {
   using lowering::LoweringContributionInterface::LoweringContributionInterface;
   void contributeSteps(lowering::LoweringStepSink &sink) const override {
     sink.beginStep("convert-sum-to-scf", false, "", false);
     sink.passConstructor(&addConvertSumToSCF);
     sink.dischargeOperation("sum.match");
-    sink.obligation("the module has reached the serialization boundary");
   }
 };
 } // namespace
