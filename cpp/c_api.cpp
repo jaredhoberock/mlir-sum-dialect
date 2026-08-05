@@ -26,6 +26,18 @@ MlirType sumSumTypeCreate(MlirContext ctx, const MlirType *wrappedVariants, intp
   return wrap(SumType::get(unwrap(ctx), variants));
 }
 
+bool sumTypeIsASum(MlirType type) {
+  return isa<SumType>(unwrap(type));
+}
+
+intptr_t sumSumTypeGetNumVariants(MlirType type) {
+  return static_cast<intptr_t>(cast<SumType>(unwrap(type)).getVariants().size());
+}
+
+MlirType sumSumTypeGetVariant(MlirType type, intptr_t index) {
+  return wrap(cast<SumType>(unwrap(type)).getVariants()[index]);
+}
+
 MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index) {
   OpBuilder builder(unwrap(loc)->getContext());
   auto op = GetOp::create(builder, unwrap(loc), unwrap(input), index);

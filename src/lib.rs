@@ -8,6 +8,9 @@ use mlir_sys::{MlirContext, MlirLocation, MlirOperation, MlirPass, MlirType, Mli
 unsafe extern "C" {
     fn sumRegisterDialect(ctx: MlirContext);
     fn sumSumTypeCreate(ctx: MlirContext, variants: *const MlirType, nVariants: isize) -> MlirType;
+    fn sumTypeIsASum(ty: MlirType) -> bool;
+    fn sumSumTypeGetNumVariants(ty: MlirType) -> isize;
+    fn sumSumTypeGetVariant(ty: MlirType, index: isize) -> MlirType;
     fn sumGetOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
     fn sumIsVariantOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
     fn sumMakeOpCreate(loc: MlirLocation, resultTy: MlirType, index: i64, payload: MlirValue) -> MlirOperation;
@@ -29,6 +32,22 @@ pub fn sum_type<'c>(context: &'c Context, variants: &[Type<'c>]) -> Type<'c> {
             variants.len() as isize,
         );
         Type::from_raw(raw)
+    }
+}
+
+/// Whether `ty` is a `!sum.sum`.
+pub fn type_is_sum(ty: Type<'_>) -> bool {
+    unsafe { sumTypeIsASum(ty.to_raw()) }
+}
+
+/// The variant types of the `!sum.sum` `ty`, in declaration order. `ty` must be a
+/// `!sum.sum`.
+pub fn sum_variant_types<'c>(ty: Type<'c>) -> Vec<Type<'c>> {
+    unsafe {
+        let count = sumSumTypeGetNumVariants(ty.to_raw());
+        (0..count)
+            .map(|index| Type::from_raw(sumSumTypeGetVariant(ty.to_raw(), index)))
+            .collect()
     }
 }
 

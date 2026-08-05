@@ -12,6 +12,16 @@ void sumRegisterDialect(MlirContext ctx);
 
 MlirType sumSumTypeCreate(MlirContext ctx, const MlirType *variants, intptr_t nVariants);
 
+// Whether `type` is a `!sum.sum`.
+bool sumTypeIsASum(MlirType type);
+
+// How many variants a `!sum.sum` carries; `type` must be a `!sum.sum`.
+intptr_t sumSumTypeGetNumVariants(MlirType type);
+
+// The variant type at `index` of a `!sum.sum`; `type` must be a `!sum.sum` and
+// `index` in range.
+MlirType sumSumTypeGetVariant(MlirType type, intptr_t index);
+
 MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index);
 
 MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t index);
