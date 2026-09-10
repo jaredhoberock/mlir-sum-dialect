@@ -69,7 +69,7 @@ $(BUILD_DIR)/libsum_dialect.a: $(DIALECT_OBJECTS)
 	ar rcs $@ $^
 
 $(BUILD_DIR)/libsum_dialect.so: $(PLUGIN_OBJECTS)
-	$(CXX) -shared $^ -o $@
+	$(CXX) -shared -Wl,--build-id $^ -o $@
 
 test: $(BUILD_DIR)/libsum_dialect.so
 	SUM_DIALECT_PLUGIN=$(CURDIR)/$(BUILD_DIR)/libsum_dialect.so lit tests
