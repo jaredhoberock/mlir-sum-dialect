@@ -179,6 +179,13 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
     // allocate temporary
     auto alloca = createStructAlloca(loc, llvmStructTy, rewriter);
 
+    // A sum value carries no undefined bytes. Zero the whole storage before the
+    // tag is written, so a nullary variant's unused payload slot and any bytes a
+    // narrower payload leaves in the shared union are defined rather than poison.
+    LLVM::StoreOp::create(rewriter, loc,
+                          LLVM::ZeroOp::create(rewriter, loc, llvmStructTy),
+                          alloca);
+
     // store tag
     uint64_t index = op.getIndex().getZExtValue();
     auto tag = LLVM::ConstantOp::create(rewriter, 
