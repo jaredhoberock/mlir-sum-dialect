@@ -243,6 +243,17 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
     auto *ctx = sumTy.getContext();
     auto i8Ty = IntegerType::get(ctx, 8);
 
+    // A payload the converter cannot convert is one the sum's data layout cannot
+    // size, so decline the sum rather than abort in the size query the readiness
+    // walk reaches while such a payload still stands. A payload that converts is a
+    // type the layout sizes, so the struct below is computed exactly as before.
+    for (Type variant : sumTy.getVariants()) {
+      if (isa<NoneType>(variant))
+        continue;
+      if (!typeConverter.convertType(variant))
+        return std::nullopt;
+    }
+
     DataLayout layout;
     size_t totalBytes = layout.getTypeSize(sumTy).getFixedValue();
     size_t abiAlign = layout.getTypeABIAlignment(sumTy);

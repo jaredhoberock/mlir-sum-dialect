@@ -9,6 +9,7 @@
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/Transforms/DialectConversion.h>
 #include <mlir/Transforms/InliningUtils.h>
 
 #include <Sum.cpp.inc>
@@ -31,15 +32,26 @@ void addConvertSumToSCF(MlirOpPassManager pm, void *) {
   mlirOpPassManagerAddOwnedPass(pm, wrap(createConvertSumToSCFPass().release()));
 }
 
+/// The legality convert-sum-to-scf hands the driver: sum.match is illegal, every
+/// other operation legal, so the step is present exactly while a match stands and
+/// has an opinion on every operation (the sum.tag and sum.get it mints are left
+/// for the terminal's LLVM lowering). It rewrites no type, so it hands back no
+/// converter.
+void *sumLegality(MlirOperation, void *targetPtr, void *) {
+  auto &target = *static_cast<ConversionTarget *>(targetPtr);
+  target.markUnknownOpDynamicallyLegal(
+      [](Operation *op) { return op->getName().getStringRef() != "sum.match"; });
+  return nullptr;
+}
+
 /// The sum dialect's lowering step converts its match operation to structured
-/// control flow, minting sum.tag and sum.get, so the dialect's op count cannot
-/// witness the claim and the exact operation names it.
+/// control flow, minting sum.tag and sum.get.
 struct LoweringContribution : lowering::LoweringContributionInterface {
   using lowering::LoweringContributionInterface::LoweringContributionInterface;
   void contributeSteps(lowering::LoweringStepSink &sink) const override {
-    sink.beginStep("convert-sum-to-scf", false, "", false);
+    sink.beginStep("convert-sum-to-scf");
     sink.passConstructor(&addConvertSumToSCF);
-    sink.dischargeOperation("sum.match");
+    sink.legality(&sumLegality, nullptr);
   }
 };
 } // namespace

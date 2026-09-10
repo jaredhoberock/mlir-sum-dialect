@@ -4,7 +4,8 @@
 #include "SumTypeInterface.hpp"
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/BuiltinTypes.h>
-#include <mlir/Transforms/GreedyPatternRewriteDriver.h>
+#include <mlir/Rewrite/FrozenRewritePatternSet.h>
+#include <mlir/Transforms/WalkPatternRewriteDriver.h>
 
 namespace mlir::sum {
 
@@ -74,8 +75,11 @@ void populateSumToSCFConversionPatterns(RewritePatternSet &patterns) {
 void ConvertSumToSCFPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   populateSumToSCFConversionPatterns(patterns);
-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
-    signalPassFailure();
+  // A walk driver applies the match lowering once per operation and neither folds
+  // nor erases trivially dead ops, so running this step before instantiation
+  // changes nothing but the matches it lowers.
+  walkAndApplyPatterns(getOperation(),
+                       FrozenRewritePatternSet(std::move(patterns)));
 }
 
 } // end mlir::sum
