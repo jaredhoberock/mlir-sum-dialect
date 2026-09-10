@@ -1,6 +1,7 @@
 #include "ConvertToLLVM.hpp"
 #include "ConvertToSCF.hpp"
 #include "LoweringContribution.hpp"
+#include "PermissiveInlinerInterface.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
@@ -21,23 +22,6 @@ struct ConvertToLLVMInterface : public mlir::ConvertToLLVMPatternInterface {
                                                LLVMTypeConverter& typeConverter,
                                                RewritePatternSet& patterns) const override final {
     populateSumToLLVMConversionPatterns(typeConverter, patterns);
-  }
-};
-
-/// Declares inlining legal for the sum dialect. MLIR's inliner clones a callee
-/// only when every op in it belongs to a dialect registering this interface, so a
-/// function holding a sum op is inlinable only once sum provides one. The hooks
-/// are permissive: sum's ops carry no state that forbids cloning them into
-/// another region.
-struct SumInlinerInterface : public DialectInlinerInterface {
-  using DialectInlinerInterface::DialectInlinerInterface;
-
-  bool isLegalToInline(Operation *, Region *, bool, IRMapping &) const final {
-    return true;
-  }
-
-  bool isLegalToInline(Region *, Region *, bool, IRMapping &) const final {
-    return true;
   }
 };
 
@@ -70,7 +54,7 @@ void SumDialect::initialize() {
 
   addInterfaces<ConvertToLLVMInterface>();
   addInterfaces<LoweringContribution>();
-  addInterfaces<SumInlinerInterface>();
+  addInterfaces<lowering::PermissiveInlinerInterface<SumDialect>>();
 }
 
 }
