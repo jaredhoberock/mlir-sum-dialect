@@ -49,9 +49,7 @@ void *sumLegality(MlirOperation, void *targetPtr, void *) {
 struct LoweringContribution : lowering::LoweringContributionInterface {
   using lowering::LoweringContributionInterface::LoweringContributionInterface;
   void contributeSteps(lowering::LoweringStepSink &sink) const override {
-    sink.beginStep("convert-sum-to-scf");
-    sink.passConstructor(&addConvertSumToSCF);
-    sink.legality(&sumLegality, nullptr);
+    sink.beginStep("convert-sum-to-scf", &addConvertSumToSCF, &sumLegality, nullptr);
   }
 };
 } // namespace
