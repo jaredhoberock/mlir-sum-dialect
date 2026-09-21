@@ -2,6 +2,7 @@
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
 #include <llvm/ADT/TypeSwitch.h>
+#include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/DialectImplementation.h>
 #include <mlir/Interfaces/DataLayoutInterfaces.h>
@@ -35,6 +36,26 @@ static uint64_t naturalAlignmentBits(const DataLayout &dataLayout, Type t) {
   return llvm::PowerOf2Ceil(sizeBits);
 }
 
+/// The size and alignment, in bits, a variant occupies inside the sum's payload,
+/// each variant measured in the LLVM form it lowers to. A scalar, a nominal
+/// struct, a tuple, or a nested sum each carries a data layout that already
+/// reports the layout of the struct it lowers to, so it is measured directly. A
+/// memref carries no data layout of its own -- the default one would abort on
+/// it -- so it is measured through the LLVM descriptor struct it lowers to,
+/// whose alignment the data layout reports correctly (the struct is pointer
+/// dominated), so it needs no natural-alignment widening.
+static std::pair<uint64_t, uint64_t>
+variantSizeAndAlignBits(const DataLayout &dataLayout, Type variant) {
+  if (isa<BaseMemRefType>(variant)) {
+    LLVMTypeConverter converter(variant.getContext());
+    Type descriptor = converter.convertType(variant);
+    return {dataLayout.getTypeSizeInBits(descriptor).getFixedValue(),
+            dataLayout.getTypeABIAlignment(descriptor) * 8};
+  }
+  return {dataLayout.getTypeSizeInBits(variant).getFixedValue(),
+          naturalAlignmentBits(dataLayout, variant)};
+}
+
 /// Returns the size of a sum type in bits: the aligned layout of
 /// `{ tag, max(variant) }` as an LLVM struct. The tag is padded out to
 /// the payload's natural alignment, then the payload occupies
@@ -49,10 +70,9 @@ llvm::TypeSize SumType::getTypeSizeInBits(
   for (Type variant : getVariants()) {
     if (isa<NoneType>(variant))
       continue;
-    maxPayloadBits = std::max(maxPayloadBits,
-        dataLayout.getTypeSizeInBits(variant).getFixedValue());
-    maxPayloadAlignBits = std::max(maxPayloadAlignBits,
-        naturalAlignmentBits(dataLayout, variant));
+    auto [sizeBits, alignBits] = variantSizeAndAlignBits(dataLayout, variant);
+    maxPayloadBits = std::max(maxPayloadBits, sizeBits);
+    maxPayloadAlignBits = std::max(maxPayloadAlignBits, alignBits);
   }
 
   uint64_t paddedTagBits = llvm::alignTo(tagBits, maxPayloadAlignBits);
@@ -74,7 +94,7 @@ uint64_t SumType::getABIAlignment(
     if (isa<NoneType>(variant))
       continue;
     maxAlignBits = std::max(maxAlignBits,
-        naturalAlignmentBits(dataLayout, variant));
+        variantSizeAndAlignBits(dataLayout, variant).second);
   }
   return maxAlignBits / 8;
 }
