@@ -2,14 +2,13 @@
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
+#include "StaticAllocaHome.hpp"
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
-#include <mlir/Dialect/GPU/IR/GPUDialect.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/BuiltinTypes.h>
-#include <mlir/Interfaces/FunctionInterfaces.h>
 #include <mlir/Transforms/DialectConversion.h>
 
 namespace mlir::sum {
@@ -23,28 +22,6 @@ getSumLLVMTypes(Type sumTy, const TypeConverter &tc) {
   return std::make_pair(llvmStructTy, cast<IntegerType>(llvmStructTy.getBody()[0]));
 }
 
-// The block where a fixed-size alloca for `anchor` belongs: the entry block of
-// the nearest enclosing gpu.launch or function-like op, searching from `anchor`
-// outward and including it. A single struct instance allocated behind a branch
-// is dynamic enough that LLVM refuses to inline the function. A gpu.launch
-// bounds the search: its body is outlined into the kernel function, so an
-// allocation for an op inside it must stay inside it -- anchored in the host
-// function it would cross the device boundary as a captured stack pointer.
-// Returns null when no such scope encloses `anchor`.
-static Block *staticAllocaHomeBlock(Operation *anchor) {
-  for (Operation *ancestor = anchor; ancestor;
-       ancestor = ancestor->getParentOp()) {
-    if (auto launch = dyn_cast<gpu::LaunchOp>(ancestor))
-      return &launch.getBody().front();
-    if (auto func = dyn_cast<FunctionOpInterface>(ancestor)) {
-      if (func.getFunctionBody().empty())
-        return nullptr;
-      return &func.getFunctionBody().front();
-    }
-  }
-  return nullptr;
-}
-
 // helper to create an alloca for a single struct instance, anchored at the
 // entry block of the enclosing gpu.launch or function so it stays a static
 // allocation. The struct is stored and read at the point of use, but its
@@ -56,7 +33,7 @@ static Value createStructAlloca(Location loc, LLVM::LLVMStructType structTy,
 
   OpBuilder::InsertionGuard guard(rewriter);
   if (Block *home =
-          staticAllocaHomeBlock(rewriter.getInsertionBlock()->getParentOp()))
+          lowering::staticAllocaHomeBlock(rewriter.getInsertionBlock()->getParentOp()))
     rewriter.setInsertionPointToStart(home);
 
   Value one = LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64Type(),
