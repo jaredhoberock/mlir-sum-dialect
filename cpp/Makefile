@@ -15,9 +15,10 @@ CXX := clang++
 CXXFLAGS := -Wall -Werror -fPIC $(shell $(LLVM_CONFIG) --cxxflags) -O2
 INCLUDES := -I$(BUILD_DIR) -I. -I$(MLIR_SYS_220_PREFIX)/include -I$(LOWERING_DRIVER_SOURCE_DIR)
 
-DIALECT_SOURCES := c_api.cpp ConvertToLLVM.cpp ConvertToSCF.cpp Sum.cpp SumOps.cpp SumTypeInterface.cpp SumTypes.cpp
+DIALECT_SOURCES := c_api.cpp ConvertToLLVM.cpp ConvertToSCF.cpp Payload.cpp Sum.cpp SumOps.cpp SumTypeInterface.cpp SumTypes.cpp
 DIALECT_OBJECTS := $(addprefix $(BUILD_DIR)/,$(DIALECT_SOURCES:.cpp=.o))
-PLUGIN_OBJECTS := $(DIALECT_OBJECTS) $(BUILD_DIR)/Plugin.o
+# The test pass that exposes the payload query to lit links into the plugin only.
+PLUGIN_OBJECTS := $(DIALECT_OBJECTS) $(BUILD_DIR)/TestPayloadPass.o $(BUILD_DIR)/Plugin.o
 DEPS := $(PLUGIN_OBJECTS:.o=.d)
 TD_FILES := $(wildcard *.td)
 

@@ -318,6 +318,24 @@ LogicalResult MatchOp::verify() {
   return success();
 }
 
+void MatchOp::getSuccessorRegions(RegionBranchPoint point,
+                                  SmallVectorImpl<RegionSuccessor> &successors) {
+  // Every case returns to the op.
+  if (!point.isParent()) {
+    successors.emplace_back(getOperation(), getResults());
+    return;
+  }
+  // Any case may be entered; its payload argument is read from the sum value,
+  // not forwarded from an operand.
+  for (Region &caseRegion : getCases())
+    successors.emplace_back(&caseRegion);
+}
+
+void MatchOp::getRegionInvocationBounds(
+    ArrayRef<Attribute> operands, SmallVectorImpl<InvocationBounds> &bounds) {
+  bounds.append(getNumRegions(), InvocationBounds(/*lb=*/0, /*ub=*/1));
+}
+
 //===----------------------------------------------------------------------===//
 // TagOp
 //===----------------------------------------------------------------------===//

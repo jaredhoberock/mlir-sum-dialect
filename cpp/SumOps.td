@@ -106,13 +106,21 @@ def MakeOp : SumDialectOp<"make", [Pure]> {
 def MatchOp : SumDialectOp<"match", [
   OpAsmOpInterface,
   RecursiveMemoryEffects,
-  SingleBlockImplicitTerminator<"YieldOp">
+  SingleBlockImplicitTerminator<"YieldOp">,
+  DeclareOpInterfaceMethods<RegionBranchOpInterface,
+                            ["getRegionInvocationBounds"]>
 ]> {
   let summary = "Switch on a sum type variant";
   let description = [{
     Dispatches to one of several regions based on the sum type's variant.
     Each region receives the variant's payload as block arguments.
     Nullary variants (variant type is NoneType) have no block arguments.
+
+    The region control flow is `scf.index_switch`'s, which the sum lowering
+    rewrites a match into: from the op any one case is entered, at most once,
+    with no operand forwarded (the payload argument is read from the sum
+    value), and every case returns to the op, its yield's operands becoming
+    the op's results.
 
     Example:
 
