@@ -54,7 +54,7 @@ func.func @branch_of_makes(%c: i1, %a: i64, %b: i64) {
   } else {
     %false = arith.constant false
     cf.assert %false, "unreachable"
-    %m = sum.make 0 %b : !sum.sum<(i64, none)>
+    %m = ub.poison : !sum.sum<(i64, none)>
     scf.yield %m : !sum.sum<(i64, none)>
   }
   %u = scf.if %c -> !sum.sum<(i64, none)> {

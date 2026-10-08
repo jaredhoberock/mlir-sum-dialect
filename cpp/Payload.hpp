@@ -13,8 +13,8 @@ namespace mlir::sum {
 /// of the sum is read by its own meaning: `sum.make k %v` gives `%v`; a make of
 /// another variant and `ub.poison` give nothing; a result of a region-branching
 /// op gives what each operand its RegionBranchOpInterface forwards into that
-/// result gives, except an operand of a terminator whose block cannot return
-/// (it asserts a constant false); a sum that is itself a payload read gives
+/// result gives, so an arm that cannot return gives nothing by yielding
+/// `ub.poison`; a sum that is itself a payload read gives
 /// variant k of each value it can be. The values are distinct, in the order
 /// the producers are read. Returns none when `value` reads no payload, or when
 /// some producer of the sum is none of these.

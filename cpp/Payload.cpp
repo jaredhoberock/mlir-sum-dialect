@@ -2,9 +2,7 @@
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include <llvm/ADT/SetVector.h>
-#include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
-#include <mlir/IR/Matchers.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
 
 namespace mlir::sum {
@@ -25,15 +23,6 @@ static std::optional<std::pair<Value, unsigned>> payloadRead(Value value) {
   // and the case's position among the regions is the variant.
   return std::make_pair(match.getInput(),
                         argument.getParentRegion()->getRegionNumber());
-}
-
-/// Whether the block `terminator` ends can never reach it: an assertion of a
-/// constant false stands before it.
-static bool cannotReturn(Operation *terminator) {
-  return llvm::any_of(*terminator->getBlock(), [](Operation &op) {
-    auto assertion = dyn_cast<cf::AssertOp>(op);
-    return assertion && matchPattern(assertion.getArg(), m_Zero());
-  });
 }
 
 /// Adds to `sources` the values variant `index` of `sum` can carry; fails when
@@ -63,15 +52,9 @@ static LogicalResult collectPayloads(Value sum, unsigned index,
   auto forwarded = forwarders.find(sum);
   if (forwarded == forwarders.end())
     return failure();
-  for (OpOperand *operand : forwarded->second) {
-    // An operand the op forwards on entry is not a terminator's; a terminator
-    // that cannot be reached forwards nothing.
-    Operation *owner = operand->getOwner();
-    if (owner != branch.getOperation() && cannotReturn(owner))
-      continue;
+  for (OpOperand *operand : forwarded->second)
     if (failed(collectPayloads(operand->get(), index, sources)))
       return failure();
-  }
   return success();
 }
 
