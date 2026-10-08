@@ -1,6 +1,7 @@
 #include "Payload.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
+#include "ForwardedValues.hpp"
 #include <llvm/ADT/SetVector.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/Interfaces/ControlFlowInterfaces.h>
@@ -47,13 +48,11 @@ static LogicalResult collectPayloads(Value sum, unsigned index,
       result ? dyn_cast<RegionBranchOpInterface>(result.getOwner()) : nullptr;
   if (!branch)
     return failure();
-  RegionBranchInverseSuccessorMapping forwarders;
-  branch.getSuccessorInputOperandMapping(forwarders);
-  auto forwarded = forwarders.find(sum);
-  if (forwarded == forwarders.end())
+  SmallVector<Value> forwarded = lowering::valuesForwardedInto(branch, sum);
+  if (forwarded.empty())
     return failure();
-  for (OpOperand *operand : forwarded->second)
-    if (failed(collectPayloads(operand->get(), index, sources)))
+  for (Value carried : forwarded)
+    if (failed(collectPayloads(carried, index, sources)))
       return failure();
   return success();
 }
