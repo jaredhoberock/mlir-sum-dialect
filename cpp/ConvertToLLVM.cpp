@@ -123,9 +123,12 @@ struct TagOpLowering : OpConversionPattern<TagOp> {
     if (failed(getLoweredSum(inputTy, *getTypeConverter())))
       return op.emitOpError() << "cannot lower sum type to LLVM: " << inputTy;
 
+    // The tag holds a variant ordinal, which is never negative: it widens to
+    // an index zero-extended, so a tag whose top bit is set (variant 128 of an
+    // i8 tag) reads as its ordinal rather than as a negative number.
     Value tag = LLVM::ExtractValueOp::create(rewriter, loc, adaptor.getInput(), 0);
-    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, rewriter.getIndexType(),
-                                                    tag);
+    rewriter.replaceOpWithNewOp<arith::IndexCastUIOp>(
+        op, rewriter.getIndexType(), tag);
     return success();
   }
 };

@@ -1,0 +1,291 @@
+// RUN: mlir-opt --pass-pipeline="builtin.module(convert-sum-to-scf,convert-scf-to-cf,convert-to-llvm,reconcile-unrealized-casts)" %s \
+// RUN: | mlir-runner --entry-point-result=void --shared-libs=%mlir_c_runner_utils \
+// RUN: | FileCheck %s
+
+// A sum of 256 variants is the most an i8 tag holds: the last variant, 255,
+// sets every bit of the tag. The tag reads as 255 and the match enters the arm of
+// variant 255, which receives its payload.
+
+// CHECK: {{^}}255{{$}}
+// CHECK-NEXT: {{^}}7{{$}}
+// CHECK-NEXT: {{^}}255{{$}}
+
+!s256 = !sum.sum<(none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, none, i64)>
+
+module {
+  func.func @main() {
+    %seven = arith.constant 7 : i64
+    %s = sum.make 255 %seven : !s256
+    %tag = sum.tag %s : !s256
+    %tag64 = arith.index_cast %tag : index to i64
+    func.call @printI64(%tag64) : (i64) -> ()
+    func.call @printNewline() : () -> ()
+    %arm = sum.match %s : !s256 -> i64
+    case 0 { %c = arith.constant 0 : i64 yield %c : i64 }
+    case 1 { %c = arith.constant 1 : i64 yield %c : i64 }
+    case 2 { %c = arith.constant 2 : i64 yield %c : i64 }
+    case 3 { %c = arith.constant 3 : i64 yield %c : i64 }
+    case 4 { %c = arith.constant 4 : i64 yield %c : i64 }
+    case 5 { %c = arith.constant 5 : i64 yield %c : i64 }
+    case 6 { %c = arith.constant 6 : i64 yield %c : i64 }
+    case 7 { %c = arith.constant 7 : i64 yield %c : i64 }
+    case 8 { %c = arith.constant 8 : i64 yield %c : i64 }
+    case 9 { %c = arith.constant 9 : i64 yield %c : i64 }
+    case 10 { %c = arith.constant 10 : i64 yield %c : i64 }
+    case 11 { %c = arith.constant 11 : i64 yield %c : i64 }
+    case 12 { %c = arith.constant 12 : i64 yield %c : i64 }
+    case 13 { %c = arith.constant 13 : i64 yield %c : i64 }
+    case 14 { %c = arith.constant 14 : i64 yield %c : i64 }
+    case 15 { %c = arith.constant 15 : i64 yield %c : i64 }
+    case 16 { %c = arith.constant 16 : i64 yield %c : i64 }
+    case 17 { %c = arith.constant 17 : i64 yield %c : i64 }
+    case 18 { %c = arith.constant 18 : i64 yield %c : i64 }
+    case 19 { %c = arith.constant 19 : i64 yield %c : i64 }
+    case 20 { %c = arith.constant 20 : i64 yield %c : i64 }
+    case 21 { %c = arith.constant 21 : i64 yield %c : i64 }
+    case 22 { %c = arith.constant 22 : i64 yield %c : i64 }
+    case 23 { %c = arith.constant 23 : i64 yield %c : i64 }
+    case 24 { %c = arith.constant 24 : i64 yield %c : i64 }
+    case 25 { %c = arith.constant 25 : i64 yield %c : i64 }
+    case 26 { %c = arith.constant 26 : i64 yield %c : i64 }
+    case 27 { %c = arith.constant 27 : i64 yield %c : i64 }
+    case 28 { %c = arith.constant 28 : i64 yield %c : i64 }
+    case 29 { %c = arith.constant 29 : i64 yield %c : i64 }
+    case 30 { %c = arith.constant 30 : i64 yield %c : i64 }
+    case 31 { %c = arith.constant 31 : i64 yield %c : i64 }
+    case 32 { %c = arith.constant 32 : i64 yield %c : i64 }
+    case 33 { %c = arith.constant 33 : i64 yield %c : i64 }
+    case 34 { %c = arith.constant 34 : i64 yield %c : i64 }
+    case 35 { %c = arith.constant 35 : i64 yield %c : i64 }
+    case 36 { %c = arith.constant 36 : i64 yield %c : i64 }
+    case 37 { %c = arith.constant 37 : i64 yield %c : i64 }
+    case 38 { %c = arith.constant 38 : i64 yield %c : i64 }
+    case 39 { %c = arith.constant 39 : i64 yield %c : i64 }
+    case 40 { %c = arith.constant 40 : i64 yield %c : i64 }
+    case 41 { %c = arith.constant 41 : i64 yield %c : i64 }
+    case 42 { %c = arith.constant 42 : i64 yield %c : i64 }
+    case 43 { %c = arith.constant 43 : i64 yield %c : i64 }
+    case 44 { %c = arith.constant 44 : i64 yield %c : i64 }
+    case 45 { %c = arith.constant 45 : i64 yield %c : i64 }
+    case 46 { %c = arith.constant 46 : i64 yield %c : i64 }
+    case 47 { %c = arith.constant 47 : i64 yield %c : i64 }
+    case 48 { %c = arith.constant 48 : i64 yield %c : i64 }
+    case 49 { %c = arith.constant 49 : i64 yield %c : i64 }
+    case 50 { %c = arith.constant 50 : i64 yield %c : i64 }
+    case 51 { %c = arith.constant 51 : i64 yield %c : i64 }
+    case 52 { %c = arith.constant 52 : i64 yield %c : i64 }
+    case 53 { %c = arith.constant 53 : i64 yield %c : i64 }
+    case 54 { %c = arith.constant 54 : i64 yield %c : i64 }
+    case 55 { %c = arith.constant 55 : i64 yield %c : i64 }
+    case 56 { %c = arith.constant 56 : i64 yield %c : i64 }
+    case 57 { %c = arith.constant 57 : i64 yield %c : i64 }
+    case 58 { %c = arith.constant 58 : i64 yield %c : i64 }
+    case 59 { %c = arith.constant 59 : i64 yield %c : i64 }
+    case 60 { %c = arith.constant 60 : i64 yield %c : i64 }
+    case 61 { %c = arith.constant 61 : i64 yield %c : i64 }
+    case 62 { %c = arith.constant 62 : i64 yield %c : i64 }
+    case 63 { %c = arith.constant 63 : i64 yield %c : i64 }
+    case 64 { %c = arith.constant 64 : i64 yield %c : i64 }
+    case 65 { %c = arith.constant 65 : i64 yield %c : i64 }
+    case 66 { %c = arith.constant 66 : i64 yield %c : i64 }
+    case 67 { %c = arith.constant 67 : i64 yield %c : i64 }
+    case 68 { %c = arith.constant 68 : i64 yield %c : i64 }
+    case 69 { %c = arith.constant 69 : i64 yield %c : i64 }
+    case 70 { %c = arith.constant 70 : i64 yield %c : i64 }
+    case 71 { %c = arith.constant 71 : i64 yield %c : i64 }
+    case 72 { %c = arith.constant 72 : i64 yield %c : i64 }
+    case 73 { %c = arith.constant 73 : i64 yield %c : i64 }
+    case 74 { %c = arith.constant 74 : i64 yield %c : i64 }
+    case 75 { %c = arith.constant 75 : i64 yield %c : i64 }
+    case 76 { %c = arith.constant 76 : i64 yield %c : i64 }
+    case 77 { %c = arith.constant 77 : i64 yield %c : i64 }
+    case 78 { %c = arith.constant 78 : i64 yield %c : i64 }
+    case 79 { %c = arith.constant 79 : i64 yield %c : i64 }
+    case 80 { %c = arith.constant 80 : i64 yield %c : i64 }
+    case 81 { %c = arith.constant 81 : i64 yield %c : i64 }
+    case 82 { %c = arith.constant 82 : i64 yield %c : i64 }
+    case 83 { %c = arith.constant 83 : i64 yield %c : i64 }
+    case 84 { %c = arith.constant 84 : i64 yield %c : i64 }
+    case 85 { %c = arith.constant 85 : i64 yield %c : i64 }
+    case 86 { %c = arith.constant 86 : i64 yield %c : i64 }
+    case 87 { %c = arith.constant 87 : i64 yield %c : i64 }
+    case 88 { %c = arith.constant 88 : i64 yield %c : i64 }
+    case 89 { %c = arith.constant 89 : i64 yield %c : i64 }
+    case 90 { %c = arith.constant 90 : i64 yield %c : i64 }
+    case 91 { %c = arith.constant 91 : i64 yield %c : i64 }
+    case 92 { %c = arith.constant 92 : i64 yield %c : i64 }
+    case 93 { %c = arith.constant 93 : i64 yield %c : i64 }
+    case 94 { %c = arith.constant 94 : i64 yield %c : i64 }
+    case 95 { %c = arith.constant 95 : i64 yield %c : i64 }
+    case 96 { %c = arith.constant 96 : i64 yield %c : i64 }
+    case 97 { %c = arith.constant 97 : i64 yield %c : i64 }
+    case 98 { %c = arith.constant 98 : i64 yield %c : i64 }
+    case 99 { %c = arith.constant 99 : i64 yield %c : i64 }
+    case 100 { %c = arith.constant 100 : i64 yield %c : i64 }
+    case 101 { %c = arith.constant 101 : i64 yield %c : i64 }
+    case 102 { %c = arith.constant 102 : i64 yield %c : i64 }
+    case 103 { %c = arith.constant 103 : i64 yield %c : i64 }
+    case 104 { %c = arith.constant 104 : i64 yield %c : i64 }
+    case 105 { %c = arith.constant 105 : i64 yield %c : i64 }
+    case 106 { %c = arith.constant 106 : i64 yield %c : i64 }
+    case 107 { %c = arith.constant 107 : i64 yield %c : i64 }
+    case 108 { %c = arith.constant 108 : i64 yield %c : i64 }
+    case 109 { %c = arith.constant 109 : i64 yield %c : i64 }
+    case 110 { %c = arith.constant 110 : i64 yield %c : i64 }
+    case 111 { %c = arith.constant 111 : i64 yield %c : i64 }
+    case 112 { %c = arith.constant 112 : i64 yield %c : i64 }
+    case 113 { %c = arith.constant 113 : i64 yield %c : i64 }
+    case 114 { %c = arith.constant 114 : i64 yield %c : i64 }
+    case 115 { %c = arith.constant 115 : i64 yield %c : i64 }
+    case 116 { %c = arith.constant 116 : i64 yield %c : i64 }
+    case 117 { %c = arith.constant 117 : i64 yield %c : i64 }
+    case 118 { %c = arith.constant 118 : i64 yield %c : i64 }
+    case 119 { %c = arith.constant 119 : i64 yield %c : i64 }
+    case 120 { %c = arith.constant 120 : i64 yield %c : i64 }
+    case 121 { %c = arith.constant 121 : i64 yield %c : i64 }
+    case 122 { %c = arith.constant 122 : i64 yield %c : i64 }
+    case 123 { %c = arith.constant 123 : i64 yield %c : i64 }
+    case 124 { %c = arith.constant 124 : i64 yield %c : i64 }
+    case 125 { %c = arith.constant 125 : i64 yield %c : i64 }
+    case 126 { %c = arith.constant 126 : i64 yield %c : i64 }
+    case 127 { %c = arith.constant 127 : i64 yield %c : i64 }
+    case 128 { %c = arith.constant 128 : i64 yield %c : i64 }
+    case 129 { %c = arith.constant 129 : i64 yield %c : i64 }
+    case 130 { %c = arith.constant 130 : i64 yield %c : i64 }
+    case 131 { %c = arith.constant 131 : i64 yield %c : i64 }
+    case 132 { %c = arith.constant 132 : i64 yield %c : i64 }
+    case 133 { %c = arith.constant 133 : i64 yield %c : i64 }
+    case 134 { %c = arith.constant 134 : i64 yield %c : i64 }
+    case 135 { %c = arith.constant 135 : i64 yield %c : i64 }
+    case 136 { %c = arith.constant 136 : i64 yield %c : i64 }
+    case 137 { %c = arith.constant 137 : i64 yield %c : i64 }
+    case 138 { %c = arith.constant 138 : i64 yield %c : i64 }
+    case 139 { %c = arith.constant 139 : i64 yield %c : i64 }
+    case 140 { %c = arith.constant 140 : i64 yield %c : i64 }
+    case 141 { %c = arith.constant 141 : i64 yield %c : i64 }
+    case 142 { %c = arith.constant 142 : i64 yield %c : i64 }
+    case 143 { %c = arith.constant 143 : i64 yield %c : i64 }
+    case 144 { %c = arith.constant 144 : i64 yield %c : i64 }
+    case 145 { %c = arith.constant 145 : i64 yield %c : i64 }
+    case 146 { %c = arith.constant 146 : i64 yield %c : i64 }
+    case 147 { %c = arith.constant 147 : i64 yield %c : i64 }
+    case 148 { %c = arith.constant 148 : i64 yield %c : i64 }
+    case 149 { %c = arith.constant 149 : i64 yield %c : i64 }
+    case 150 { %c = arith.constant 150 : i64 yield %c : i64 }
+    case 151 { %c = arith.constant 151 : i64 yield %c : i64 }
+    case 152 { %c = arith.constant 152 : i64 yield %c : i64 }
+    case 153 { %c = arith.constant 153 : i64 yield %c : i64 }
+    case 154 { %c = arith.constant 154 : i64 yield %c : i64 }
+    case 155 { %c = arith.constant 155 : i64 yield %c : i64 }
+    case 156 { %c = arith.constant 156 : i64 yield %c : i64 }
+    case 157 { %c = arith.constant 157 : i64 yield %c : i64 }
+    case 158 { %c = arith.constant 158 : i64 yield %c : i64 }
+    case 159 { %c = arith.constant 159 : i64 yield %c : i64 }
+    case 160 { %c = arith.constant 160 : i64 yield %c : i64 }
+    case 161 { %c = arith.constant 161 : i64 yield %c : i64 }
+    case 162 { %c = arith.constant 162 : i64 yield %c : i64 }
+    case 163 { %c = arith.constant 163 : i64 yield %c : i64 }
+    case 164 { %c = arith.constant 164 : i64 yield %c : i64 }
+    case 165 { %c = arith.constant 165 : i64 yield %c : i64 }
+    case 166 { %c = arith.constant 166 : i64 yield %c : i64 }
+    case 167 { %c = arith.constant 167 : i64 yield %c : i64 }
+    case 168 { %c = arith.constant 168 : i64 yield %c : i64 }
+    case 169 { %c = arith.constant 169 : i64 yield %c : i64 }
+    case 170 { %c = arith.constant 170 : i64 yield %c : i64 }
+    case 171 { %c = arith.constant 171 : i64 yield %c : i64 }
+    case 172 { %c = arith.constant 172 : i64 yield %c : i64 }
+    case 173 { %c = arith.constant 173 : i64 yield %c : i64 }
+    case 174 { %c = arith.constant 174 : i64 yield %c : i64 }
+    case 175 { %c = arith.constant 175 : i64 yield %c : i64 }
+    case 176 { %c = arith.constant 176 : i64 yield %c : i64 }
+    case 177 { %c = arith.constant 177 : i64 yield %c : i64 }
+    case 178 { %c = arith.constant 178 : i64 yield %c : i64 }
+    case 179 { %c = arith.constant 179 : i64 yield %c : i64 }
+    case 180 { %c = arith.constant 180 : i64 yield %c : i64 }
+    case 181 { %c = arith.constant 181 : i64 yield %c : i64 }
+    case 182 { %c = arith.constant 182 : i64 yield %c : i64 }
+    case 183 { %c = arith.constant 183 : i64 yield %c : i64 }
+    case 184 { %c = arith.constant 184 : i64 yield %c : i64 }
+    case 185 { %c = arith.constant 185 : i64 yield %c : i64 }
+    case 186 { %c = arith.constant 186 : i64 yield %c : i64 }
+    case 187 { %c = arith.constant 187 : i64 yield %c : i64 }
+    case 188 { %c = arith.constant 188 : i64 yield %c : i64 }
+    case 189 { %c = arith.constant 189 : i64 yield %c : i64 }
+    case 190 { %c = arith.constant 190 : i64 yield %c : i64 }
+    case 191 { %c = arith.constant 191 : i64 yield %c : i64 }
+    case 192 { %c = arith.constant 192 : i64 yield %c : i64 }
+    case 193 { %c = arith.constant 193 : i64 yield %c : i64 }
+    case 194 { %c = arith.constant 194 : i64 yield %c : i64 }
+    case 195 { %c = arith.constant 195 : i64 yield %c : i64 }
+    case 196 { %c = arith.constant 196 : i64 yield %c : i64 }
+    case 197 { %c = arith.constant 197 : i64 yield %c : i64 }
+    case 198 { %c = arith.constant 198 : i64 yield %c : i64 }
+    case 199 { %c = arith.constant 199 : i64 yield %c : i64 }
+    case 200 { %c = arith.constant 200 : i64 yield %c : i64 }
+    case 201 { %c = arith.constant 201 : i64 yield %c : i64 }
+    case 202 { %c = arith.constant 202 : i64 yield %c : i64 }
+    case 203 { %c = arith.constant 203 : i64 yield %c : i64 }
+    case 204 { %c = arith.constant 204 : i64 yield %c : i64 }
+    case 205 { %c = arith.constant 205 : i64 yield %c : i64 }
+    case 206 { %c = arith.constant 206 : i64 yield %c : i64 }
+    case 207 { %c = arith.constant 207 : i64 yield %c : i64 }
+    case 208 { %c = arith.constant 208 : i64 yield %c : i64 }
+    case 209 { %c = arith.constant 209 : i64 yield %c : i64 }
+    case 210 { %c = arith.constant 210 : i64 yield %c : i64 }
+    case 211 { %c = arith.constant 211 : i64 yield %c : i64 }
+    case 212 { %c = arith.constant 212 : i64 yield %c : i64 }
+    case 213 { %c = arith.constant 213 : i64 yield %c : i64 }
+    case 214 { %c = arith.constant 214 : i64 yield %c : i64 }
+    case 215 { %c = arith.constant 215 : i64 yield %c : i64 }
+    case 216 { %c = arith.constant 216 : i64 yield %c : i64 }
+    case 217 { %c = arith.constant 217 : i64 yield %c : i64 }
+    case 218 { %c = arith.constant 218 : i64 yield %c : i64 }
+    case 219 { %c = arith.constant 219 : i64 yield %c : i64 }
+    case 220 { %c = arith.constant 220 : i64 yield %c : i64 }
+    case 221 { %c = arith.constant 221 : i64 yield %c : i64 }
+    case 222 { %c = arith.constant 222 : i64 yield %c : i64 }
+    case 223 { %c = arith.constant 223 : i64 yield %c : i64 }
+    case 224 { %c = arith.constant 224 : i64 yield %c : i64 }
+    case 225 { %c = arith.constant 225 : i64 yield %c : i64 }
+    case 226 { %c = arith.constant 226 : i64 yield %c : i64 }
+    case 227 { %c = arith.constant 227 : i64 yield %c : i64 }
+    case 228 { %c = arith.constant 228 : i64 yield %c : i64 }
+    case 229 { %c = arith.constant 229 : i64 yield %c : i64 }
+    case 230 { %c = arith.constant 230 : i64 yield %c : i64 }
+    case 231 { %c = arith.constant 231 : i64 yield %c : i64 }
+    case 232 { %c = arith.constant 232 : i64 yield %c : i64 }
+    case 233 { %c = arith.constant 233 : i64 yield %c : i64 }
+    case 234 { %c = arith.constant 234 : i64 yield %c : i64 }
+    case 235 { %c = arith.constant 235 : i64 yield %c : i64 }
+    case 236 { %c = arith.constant 236 : i64 yield %c : i64 }
+    case 237 { %c = arith.constant 237 : i64 yield %c : i64 }
+    case 238 { %c = arith.constant 238 : i64 yield %c : i64 }
+    case 239 { %c = arith.constant 239 : i64 yield %c : i64 }
+    case 240 { %c = arith.constant 240 : i64 yield %c : i64 }
+    case 241 { %c = arith.constant 241 : i64 yield %c : i64 }
+    case 242 { %c = arith.constant 242 : i64 yield %c : i64 }
+    case 243 { %c = arith.constant 243 : i64 yield %c : i64 }
+    case 244 { %c = arith.constant 244 : i64 yield %c : i64 }
+    case 245 { %c = arith.constant 245 : i64 yield %c : i64 }
+    case 246 { %c = arith.constant 246 : i64 yield %c : i64 }
+    case 247 { %c = arith.constant 247 : i64 yield %c : i64 }
+    case 248 { %c = arith.constant 248 : i64 yield %c : i64 }
+    case 249 { %c = arith.constant 249 : i64 yield %c : i64 }
+    case 250 { %c = arith.constant 250 : i64 yield %c : i64 }
+    case 251 { %c = arith.constant 251 : i64 yield %c : i64 }
+    case 252 { %c = arith.constant 252 : i64 yield %c : i64 }
+    case 253 { %c = arith.constant 253 : i64 yield %c : i64 }
+    case 254 { %c = arith.constant 254 : i64 yield %c : i64 }
+    case 255 (%p: i64) {
+      func.call @printI64(%p) : (i64) -> ()
+      func.call @printNewline() : () -> ()
+      %c = arith.constant 255 : i64
+      yield %c : i64
+    }
+    func.call @printI64(%arm) : (i64) -> ()
+    func.call @printNewline() : () -> ()
+    return
+  }
+  func.func private @printI64(i64)
+  func.func private @printNewline()
+}
