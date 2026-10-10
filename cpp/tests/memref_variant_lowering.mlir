@@ -18,4 +18,18 @@ module {
     %s = sum.make 0 %x : !sum.sum<(memref<?xi64, strided<[1], offset: ?>>, none)>
     return %s : !sum.sum<(memref<?xi64, strided<[1], offset: ?>>, none)>
   }
+
+  // A memref whose element is itself a sum lowers the same way: its descriptor
+  // is converted with every loaded dialect's conversion, so the sum element
+  // converts as the lowering converts it.
+  // CHECK-LABEL: llvm.func @wrap_memref_of_sums
+  // CHECK-NOT: sum.make
+  // CHECK-NOT: builtin.unrealized_conversion_cast
+  // CHECK: !llvm.struct<(i64, array<40 x i8>)>
+  // CHECK: llvm.return
+  func.func @wrap_memref_of_sums(%x: memref<4x!sum.sum<(i64, none)>>)
+      -> !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)> {
+    %s = sum.make 0 %x : !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)>
+    return %s : !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)>
+  }
 }
