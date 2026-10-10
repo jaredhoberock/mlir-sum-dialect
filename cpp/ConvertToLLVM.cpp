@@ -2,84 +2,37 @@
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
-#include "StaticAllocaHome.hpp"
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
-#include <mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
-#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Transforms/DialectConversion.h>
 
 namespace mlir::sum {
 
-// helper to get LLVM struct type and tag type from a sum-like type
-static FailureOr<std::pair<LLVM::LLVMStructType, IntegerType>>
-getSumLLVMTypes(Type sumTy, const TypeConverter &tc) {
-  auto llvmStructTy = dyn_cast_or_null<LLVM::LLVMStructType>(tc.convertType(sumTy));
-  if (!llvmStructTy)
+// A sum lowers to a literal LLVM struct: the tag, then one field for each
+// variant that carries a payload, in variant order; a nullary variant has no
+// field. Every operation reads or writes a field of that struct by position.
+
+/// The lowered struct `sumTy` converts to under `tc`, or failure when `tc` does
+/// not convert it.
+static FailureOr<LLVM::LLVMStructType> getLoweredSum(Type sumTy,
+                                                     const TypeConverter &tc) {
+  auto lowered = dyn_cast_or_null<LLVM::LLVMStructType>(tc.convertType(sumTy));
+  if (!lowered)
     return failure();
-  return std::make_pair(llvmStructTy, cast<IntegerType>(llvmStructTy.getBody()[0]));
+  return lowered;
 }
 
-// helper to create an alloca for a single struct instance, anchored at the
-// entry block of the enclosing gpu.launch or function so it stays a static
-// allocation. The struct is stored and read at the point of use, but its
-// backing storage lives at entry. With no such scope the alloca stays at the
-// current insertion point.
-static Value createStructAlloca(Location loc, LLVM::LLVMStructType structTy,
-                                ConversionPatternRewriter &rewriter) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
-
-  OpBuilder::InsertionGuard guard(rewriter);
-  if (Block *home =
-          lowering::staticAllocaHomeBlock(rewriter.getInsertionBlock()->getParentOp()))
-    rewriter.setInsertionPointToStart(home);
-
-  Value one = LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64Type(),
-                                       rewriter.getI64IntegerAttr(1));
-  return LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
-}
-
-struct LoweredSumView {
-  LLVM::LLVMStructType llvmStructTy;
-  IntegerType tagTy;
-  Value alloca;
-  Value tagIndex;   // index-typed tag
-  Value payloadPtr; // gep [0,1] into alloca
-};
-
-static FailureOr<LoweredSumView>
-getLoweredSumView(Location loc,
-                  Value loweredSumValue, // adaptor.getInput()
-                  Type sumTy,
-                  const TypeConverter &tc,
-                  ConversionPatternRewriter &rewriter) {
-  auto typesOrFail = getSumLLVMTypes(sumTy, tc);
-  if (failed(typesOrFail))
-    return failure();
-  auto [llvmStructTy, tagTy] = *typesOrFail;
-
-  MLIRContext *ctx = rewriter.getContext();
-  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
-
-  // alloca + store the lowered struct
-  Value alloca = createStructAlloca(loc, llvmStructTy, rewriter);
-  LLVM::StoreOp::create(rewriter, loc, loweredSumValue, alloca);
-
-  // tag = load *(gep [0,0])
-  Value tagPtr = LLVM::GEPOp::create(rewriter, 
-      loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 0});
-  Value tag = LLVM::LoadOp::create(rewriter, loc, tagTy, tagPtr);
-
-  // tag integer -> index
-  Value tagIndex = arith::IndexCastOp::create(rewriter, loc, rewriter.getIndexType(), tag);
-
-  // payloadPtr = gep [0,1]
-  Value payloadPtr = LLVM::GEPOp::create(rewriter, 
-      loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
-
-  return LoweredSumView{llvmStructTy, tagTy, alloca, tagIndex, payloadPtr};
+/// The field of the lowered struct that holds the payload of variant `index`:
+/// the tag is field 0, and each variant carrying a payload takes the next field
+/// in variant order.
+static int64_t payloadField(SumTypeInterface sumTy, size_t index) {
+  int64_t field = 1;
+  for (size_t variant = 0; variant != index; ++variant)
+    if (!isa<NoneType>(sumTy.getVariantType(variant)))
+      ++field;
+  return field;
 }
 
 struct GetOpLowering : OpConversionPattern<GetOp> {
@@ -88,20 +41,14 @@ struct GetOpLowering : OpConversionPattern<GetOp> {
   LogicalResult
   matchAndRewrite(GetOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
+    auto sumTy = op.getInput().getType();
+    if (failed(getLoweredSum(sumTy, *getTypeConverter())))
+      return op.emitOpError() << "cannot lower sum type to LLVM: " << sumTy;
 
-    auto viewOrFail = getLoweredSumView(
-        loc, adaptor.getInput(), op.getInput().getType(), *getTypeConverter(), rewriter);
-    if (failed(viewOrFail))
-      return op.emitOpError() << "cannot lower sum type to LLVM: " << op.getInput().getType();
-
-    Type loweredResultTy = getTypeConverter()->convertType(op.getResult().getType());
-    if (!loweredResultTy)
-      return op.emitOpError() << "cannot lower result type to LLVM: "
-                              << op.getResult().getType();
-
-    Value payload = LLVM::LoadOp::create(rewriter, loc, loweredResultTy, viewOrFail->payloadPtr);
-    rewriter.replaceOp(op, payload);
+    int64_t field = payloadField(cast<SumTypeInterface>(sumTy),
+                                 op.getIndex().getZExtValue());
+    rewriter.replaceOpWithNewOp<LLVM::ExtractValueOp>(op, adaptor.getInput(),
+                                                      field);
     return success();
   }
 };
@@ -115,24 +62,17 @@ struct IsVariantOpLowering : OpConversionPattern<IsVariantOp> {
     auto loc = op.getLoc();
     auto inputTy = op.getInput().getType();
 
-    auto typesOrFail = getSumLLVMTypes(inputTy, *getTypeConverter());
-    if (failed(typesOrFail))
+    auto lowered = getLoweredSum(inputTy, *getTypeConverter());
+    if (failed(lowered))
       return op.emitOpError() << "cannot lower sum type to LLVM: " << inputTy;
-    auto [llvmStructTy, tagTy] = *typesOrFail;
+    Type tagTy = lowered->getBody()[0];
 
-    // Extract tag from struct value
     Value tag = LLVM::ExtractValueOp::create(rewriter, loc, adaptor.getInput(), 0);
-
-    // Create constant for expected index
-    int64_t index = op.getIndex().getZExtValue();
-    Value expected = LLVM::ConstantOp::create(rewriter, 
-        loc, tagTy, rewriter.getIntegerAttr(tagTy, index));
-
-    // Compare tag == expected
-    Value result = LLVM::ICmpOp::create(rewriter, 
-        loc, LLVM::ICmpPredicate::eq, tag, expected);
-
-    rewriter.replaceOp(op, result);
+    Value expected = LLVM::ConstantOp::create(
+        rewriter, loc, tagTy,
+        rewriter.getIntegerAttr(tagTy, op.getIndex().getZExtValue()));
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, LLVM::ICmpPredicate::eq, tag,
+                                              expected);
     return success();
   }
 };
@@ -146,41 +86,27 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
     auto loc = op.getLoc();
     auto resultTy = op.getResult().getType();
 
-    auto typesOrFail = getSumLLVMTypes(resultTy, *getTypeConverter());
-    if (failed(typesOrFail))
+    auto lowered = getLoweredSum(resultTy, *getTypeConverter());
+    if (failed(lowered))
       return op.emitError() << "cannot lower sum type to LLVM: " << resultTy;
-    auto [llvmStructTy, tagTy] = *typesOrFail;
+    Type tagTy = lowered->getBody()[0];
 
-    auto ptrTy = LLVM::LLVMPointerType::get(getContext());
-
-    // allocate temporary
-    auto alloca = createStructAlloca(loc, llvmStructTy, rewriter);
-
-    // A sum value carries no undefined bytes. Zero the whole storage before the
-    // tag is written, so a nullary variant's unused payload slot and any bytes a
-    // narrower payload leaves in the shared union are defined rather than poison.
-    LLVM::StoreOp::create(rewriter, loc,
-                          LLVM::ZeroOp::create(rewriter, loc, llvmStructTy),
-                          alloca);
-
-    // store tag
+    // A sum value carries no undefined field: the struct starts from zero, so
+    // the payload fields of the variants the value does not hold are defined.
+    Value sum = LLVM::ZeroOp::create(rewriter, loc, *lowered);
     uint64_t index = op.getIndex().getZExtValue();
-    auto tag = LLVM::ConstantOp::create(rewriter, 
-        loc, tagTy, rewriter.getIntegerAttr(tagTy, index));
-    auto tagPtr = LLVM::GEPOp::create(rewriter, 
-        loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 0});
-    LLVM::StoreOp::create(rewriter, loc, tag, tagPtr);
+    Value tag = LLVM::ConstantOp::create(rewriter, loc, tagTy,
+                                         rewriter.getIntegerAttr(tagTy, index));
+    sum = LLVM::InsertValueOp::create(rewriter, loc, sum, tag,
+                                      ArrayRef<int64_t>{0});
 
-    // store payload through typed pointer (skip for nullary variants)
-    if (adaptor.getPayload()) {
-      auto payloadPtr = LLVM::GEPOp::create(rewriter, 
-          loc, ptrTy, llvmStructTy, alloca, ArrayRef<LLVM::GEPArg>{0, 1});
-      LLVM::StoreOp::create(rewriter, loc, adaptor.getPayload(), payloadPtr);
-    }
+    // a nullary variant has no payload and no field
+    if (Value payload = adaptor.getPayload())
+      sum = LLVM::InsertValueOp::create(
+          rewriter, loc, sum, payload,
+          payloadField(cast<SumTypeInterface>(resultTy), index));
 
-    // load result
-    auto result = LLVM::LoadOp::create(rewriter, loc, llvmStructTy, alloca);
-    rewriter.replaceOp(op, result);
+    rewriter.replaceOp(op, sum);
     return success();
   }
 };
@@ -194,53 +120,38 @@ struct TagOpLowering : OpConversionPattern<TagOp> {
     auto loc = op.getLoc();
     auto inputTy = op.getInput().getType();
 
-    if (failed(getSumLLVMTypes(inputTy, *getTypeConverter())))
+    if (failed(getLoweredSum(inputTy, *getTypeConverter())))
       return op.emitOpError() << "cannot lower sum type to LLVM: " << inputTy;
 
-    // Extract tag from struct value
     Value tag = LLVM::ExtractValueOp::create(rewriter, loc, adaptor.getInput(), 0);
-
-    // tag integer -> index
-    Value tagIndex = arith::IndexCastOp::create(rewriter, loc, rewriter.getIndexType(), tag);
-
-    rewriter.replaceOp(op, tagIndex);
+    rewriter.replaceOpWithNewOp<arith::IndexCastOp>(op, rewriter.getIndexType(),
+                                                    tag);
     return success();
   }
 };
 
 void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
                                         RewritePatternSet& patterns) {
-  // !sum.sum<(A, B, ...)> → !llvm.struct<(iPaddedTag, array<M x i8>)>
-  // Uses SumType's DataLayout to determine total size and alignment.
-  // The tag integer is widened to fill the padding gap so the payload
-  // field starts at the ABI alignment boundary. This keeps the struct
-  // at two fields (tag=0, payload=1) and ensures stores/loads of
-  // variant values through the payload pointer are properly aligned.
+  // !sum.sum<(A, none, B, ...)> → !llvm.struct<(iTag, A', B', ...)>. The struct
+  // is a literal LLVM struct of the tag and the converted payloads, so LLVM lays
+  // out every byte of it -- each payload at its own alignment, the whole at the
+  // largest -- by the data layout of the module it is compiled in; the
+  // conversion computes no size or offset of its own. A payload the converter
+  // does not convert leaves the sum unconverted, so the step that lowers the
+  // payload's type runs first.
   typeConverter.addConversion([&](SumType sumTy) -> std::optional<Type> {
-    auto *ctx = sumTy.getContext();
-    auto i8Ty = IntegerType::get(ctx, 8);
-
-    // A payload the converter cannot convert is one the sum's data layout cannot
-    // size, so decline the sum rather than abort in the size query the readiness
-    // walk reaches while such a payload still stands. A payload that converts is a
-    // type the layout sizes, so the struct below is computed exactly as before.
+    MLIRContext *ctx = sumTy.getContext();
+    SmallVector<Type> fields = {
+        IntegerType::get(ctx, sumTy.getSizeOfTagInBytes() * 8)};
     for (Type variant : sumTy.getVariants()) {
       if (isa<NoneType>(variant))
         continue;
-      if (!typeConverter.convertType(variant))
+      Type lowered = typeConverter.convertType(variant);
+      if (!lowered)
         return std::nullopt;
+      fields.push_back(lowered);
     }
-
-    DataLayout layout;
-    size_t totalBytes = layout.getTypeSize(sumTy).getFixedValue();
-    size_t abiAlign = layout.getTypeABIAlignment(sumTy);
-    size_t tagBytes = sumTy.getSizeOfTagInBytes();
-    size_t paddedTagBytes = llvm::alignTo(tagBytes, abiAlign);
-    size_t payloadBytes = totalBytes - paddedTagBytes;
-
-    auto tagTy = IntegerType::get(ctx, paddedTagBytes * 8);
-    auto payloadTy = LLVM::LLVMArrayType::get(i8Ty, payloadBytes);
-    return LLVM::LLVMStructType::getLiteral(ctx, {tagTy, payloadTy});
+    return LLVM::LLVMStructType::getLiteral(ctx, fields);
   });
 
   patterns.add<

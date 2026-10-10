@@ -1,16 +1,12 @@
 // RUN: mlir-opt --pass-pipeline="builtin.module(convert-to-llvm)" %s | FileCheck %s
 
-// A sum whose variant is a memref lowers all the way to LLVM: the payload is
-// sized and aligned from the memref's LLVM descriptor struct, not from a data
-// layout query on the memref type itself, which carries no layout of its own and
-// would abort the conversion. The 1-D descriptor is five index-sized words, so
-// the payload blob is 40 bytes and the tag widens to the descriptor's 8-byte
-// alignment.
+// A sum whose variant is a memref lowers all the way to LLVM: the payload field
+// holds the memref's LLVM descriptor struct, converted as the lowering converts
+// it.
 
 // CHECK-LABEL: llvm.func @wrap
 // CHECK-NOT: sum.make
 // CHECK-NOT: builtin.unrealized_conversion_cast
-// CHECK: !llvm.struct<(i64, array<40 x i8>)>
 // CHECK: llvm.return
 module {
   func.func @wrap(%x: memref<?xi64, strided<[1], offset: ?>>)
@@ -25,7 +21,6 @@ module {
   // CHECK-LABEL: llvm.func @wrap_memref_of_sums
   // CHECK-NOT: sum.make
   // CHECK-NOT: builtin.unrealized_conversion_cast
-  // CHECK: !llvm.struct<(i64, array<40 x i8>)>
   // CHECK: llvm.return
   func.func @wrap_memref_of_sums(%x: memref<4x!sum.sum<(i64, none)>>)
       -> !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)> {

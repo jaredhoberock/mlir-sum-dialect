@@ -22,4 +22,6 @@ def plugin(env_var, fallback):
 config.name = "Sum Dialect Tests"
 sum_plugin = plugin('SUM_DIALECT_PLUGIN', os.path.join(os.path.dirname(__file__), '..', 'build', 'libsum_dialect.so'))
 config.substitutions.append(('mlir-opt', f'{tool('mlir-opt')} --load-dialect-plugin={sum_plugin}'))
+config.substitutions.append(('mlir-runner', tool('mlir-runner')))
+config.substitutions.append(('%mlir_c_runner_utils', os.path.join(llvm_lib, 'libmlir_c_runner_utils.so')))
 config.substitutions.append(('FileCheck', tool('FileCheck')))

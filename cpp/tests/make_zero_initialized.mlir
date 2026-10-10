@@ -1,14 +1,12 @@
 // RUN: mlir-opt --pass-pipeline="builtin.module(convert-to-llvm)" %s | FileCheck %s
 
-// A sum value carries no undefined bytes: the make lowering zeroes the whole
-// struct before it writes the tag, so a nullary variant's unused payload slot
-// and any bytes a narrower payload leaves in the shared union are defined rather
-// than poison. The zero store lands on the alloca ahead of the tag store.
+// A sum value carries no undefined field: the make lowering builds the struct
+// from zero, so the payload fields of the variants a value does not hold are
+// defined rather than poison. The tag is inserted into the zero struct.
 
 // CHECK-LABEL: llvm.func @make_nullary
-// CHECK: %[[ALLOCA:.*]] = llvm.alloca
 // CHECK: %[[Z:.*]] = llvm.mlir.zero : !llvm.struct<
-// CHECK: llvm.store %[[Z]], %[[ALLOCA]]
+// CHECK: llvm.insertvalue %{{.*}}, %[[Z]][0]
 // CHECK: llvm.return
 func.func @make_nullary() -> !sum.sum<(none, i64)> {
   %c = sum.make 0 : !sum.sum<(none, i64)>
