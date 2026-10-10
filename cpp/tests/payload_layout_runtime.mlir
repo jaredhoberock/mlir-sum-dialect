@@ -1,4 +1,4 @@
-// RUN: mlir-opt --pass-pipeline="builtin.module(convert-sum-to-scf,convert-scf-to-cf,convert-to-llvm,reconcile-unrealized-casts)" %s \
+// RUN: mlir-opt --pass-pipeline="builtin.module(llvm-target-to-data-layout,convert-sum-to-scf,convert-scf-to-cf,convert-to-llvm,reconcile-unrealized-casts)" %s \
 // RUN: | mlir-runner --entry-point-result=void --shared-libs=%mlir_c_runner_utils \
 // RUN: | FileCheck %s
 
@@ -10,7 +10,7 @@
 // CHECK: 1
 // CHECK-NEXT: 7
 // CHECK-NEXT: 1
-module {
+module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu", chip = "">} {
   func.func @main() {
     %true = arith.constant true
     %seven = arith.constant 7 : i64
