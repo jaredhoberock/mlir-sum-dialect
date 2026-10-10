@@ -14,8 +14,11 @@ def SumDialect : Dialect {
     void registerTypes();
   }];
 
+  // a sum's data-layout model measures the LLVM struct the sum lowers to, so
+  // the LLVM dialect loads with the sum dialect rather than inside a query
   let dependentDialects = [
     "mlir::arith::ArithDialect",
+    "mlir::LLVM::LLVMDialect",
     "mlir::scf::SCFDialect"
   ];
 }
