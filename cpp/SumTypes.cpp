@@ -28,7 +28,7 @@ size_t SumType::getSizeOfTagInBytes() const {
 }
 
 /// The size of a sum type in bits: the size of the literal LLVM struct it lowers
-/// to -- the tag, then each payload in its own field -- measured in `dataLayout`.
+/// to -- the tag, then one field per variant -- measured in `dataLayout`.
 /// The struct comes from the lowering's own type conversion
 /// [lowering::loweredForDataLayout], so the size a sum reports is the size of the
 /// exact struct the lowering emits, laid out by the same data layout.
