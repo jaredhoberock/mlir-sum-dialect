@@ -1,15 +1,19 @@
 #include "ConvertToLLVM.hpp"
 #include "ConvertToSCF.hpp"
 #include "LoweringContribution.hpp"
+#include "LeafConversion.hpp"
 #include "PermissiveInlinerInterface.hpp"
 #include "Sum.hpp"
+#include "SumLeafConversion.hpp"
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
 #include <mlir/CAPI/Pass.h>
 #include <mlir/Conversion/ConvertToLLVM/ToLLVMInterface.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/Transforms/DialectConversion.h>
 #include <mlir/Transforms/InliningUtils.h>
 
@@ -24,6 +28,15 @@ struct ConvertToLLVMInterface : public mlir::ConvertToLLVMPatternInterface {
                                                LLVMTypeConverter& typeConverter,
                                                RewritePatternSet& patterns) const override final {
     populateSumToLLVMConversionPatterns(typeConverter, patterns);
+  }
+};
+
+struct LeafConversionInterface : public lowering::LeafConversionInterface {
+  using lowering::LeafConversionInterface::LeafConversionInterface;
+
+  void populateLeafConversion(ConversionTarget &target, TypeConverter &converter,
+                              RewritePatternSet &patterns) const override final {
+    populateSumLeafConversion(target, converter, patterns);
   }
 };
 
@@ -64,6 +77,7 @@ void SumDialect::initialize() {
   registerTypes();
 
   addInterfaces<ConvertToLLVMInterface>();
+  addInterfaces<LeafConversionInterface>();
   addInterfaces<LoweringContribution>();
   addInterfaces<lowering::PermissiveInlinerInterface<SumDialect>>();
 }

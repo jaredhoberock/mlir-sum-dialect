@@ -15,11 +15,15 @@ def SumDialect : Dialect {
   }];
 
   // a sum's data-layout model measures the LLVM struct the sum lowers to, so
-  // the LLVM dialect loads with the sum dialect rather than inside a query
+  // the LLVM dialect loads with the sum dialect rather than inside a query; the
+  // leaf conversion's materializations build memref and ub operations wherever
+  // a sum is taken apart, so those load with it too
   let dependentDialects = [
     "mlir::arith::ArithDialect",
     "mlir::LLVM::LLVMDialect",
-    "mlir::scf::SCFDialect"
+    "mlir::memref::MemRefDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::ub::UBDialect"
   ];
 }
 
