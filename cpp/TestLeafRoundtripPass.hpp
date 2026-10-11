@@ -8,7 +8,8 @@ namespace mlir::sum {
 /// Exposes the leaf conversion's two materializations to lit: every value a
 /// `func.return` returns is taken apart into its leaves and rebuilt from them,
 /// through the conversion the loaded dialects contribute, so a row runs a sum
-/// that crossed as its leaves. Registered by the dialect's plugin only.
+/// that crossed as its leaves. A value that cannot cross is reported at its
+/// return. Registered by the dialect's plugin only.
 struct TestLeafRoundtripPass
     : public PassWrapper<TestLeafRoundtripPass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TestLeafRoundtripPass);
@@ -20,6 +21,7 @@ struct TestLeafRoundtripPass
     return "Take every returned value apart into its leaves and rebuild it";
   }
 
+  void getDependentDialects(DialectRegistry &registry) const override;
   void runOnOperation() override;
 };
 

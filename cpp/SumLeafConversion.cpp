@@ -14,6 +14,13 @@ namespace mlir::sum {
 
 namespace {
 
+/// The components of the payload variant `index` of `variants` carries: the
+/// variant itself, or none for a variant that carries no payload.
+ArrayRef<Type> payloadOf(ArrayRef<Type> variants, size_t index) {
+  return isa<NoneType>(variants[index]) ? ArrayRef<Type>()
+                                        : variants.slice(index, 1);
+}
+
 /// The leaf standing for a payload leaf of `type` the sum does not carry. A
 /// buffer is an allocation in the automatic scope, which is legal wherever the
 /// conversion runs and which an alias analysis counts as a buffer of its own; any
@@ -22,17 +29,21 @@ namespace {
 /// The buffer has the leaf's type exactly, its layout included: storage of an
 /// identity layout reinterpreted at the leaf's offset, sizes and strides, a
 /// dynamic offset or size read as 0 and a dynamic stride as 1. The storage holds
-/// as many elements as that view reaches, so a dynamically sized leaf's is empty,
-/// and a copy of the view reads only storage that exists: a static shape keeps its
-/// elements, and a rank-0 leaf, which holds exactly one element by its type, gets
-/// one. Null for a buffer whose layout is not strided.
+/// offset + sum of (size - 1) * stride + 1 elements, or none when a size is 0,
+/// which for the non-negative strides this accepts is one past the highest
+/// element the view addresses: a dynamically sized leaf's storage is empty, and a
+/// rank-0 leaf, which holds one element by its type, gets one. Null for a buffer
+/// whose layout is not strided or has a negative stride.
 Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
   auto buffer = dyn_cast<MemRefType>(type);
   if (!buffer)
     return ub::PoisonOp::create(builder, loc, type);
   SmallVector<int64_t> strides;
   int64_t offset;
-  if (failed(buffer.getStridesAndOffset(strides, offset)))
+  if (failed(buffer.getStridesAndOffset(strides, offset)) ||
+      llvm::any_of(strides, [](int64_t stride) {
+        return !ShapedType::isDynamic(stride) && stride < 0;
+      }))
     return Value();
   int64_t viewOffset = ShapedType::isDynamic(offset) ? 0 : offset;
   SmallVector<int64_t> viewSizes, viewStrides;
@@ -61,9 +72,9 @@ void populateSumLeafConversion(ConversionTarget &, TypeConverter &converter,
           -> std::optional<LogicalResult> {
         // A refusal leaves `leaves` as it found them, the converter's contract.
         SmallVector<Type> sumLeaves = {IndexType::get(type.getContext())};
-        for (Type variant : type.getVariants())
-          if (!isa<NoneType>(variant) &&
-              failed(converter.convertType(variant, sumLeaves)))
+        for (size_t index = 0, e = type.getVariants().size(); index != e; ++index)
+          if (failed(converter.convertTypes(payloadOf(type.getVariants(), index),
+                                            sumLeaves)))
             return failure();
         llvm::append_range(leaves, sumLeaves);
         return success();
@@ -79,30 +90,27 @@ void populateSumLeafConversion(ConversionTarget &, TypeConverter &converter,
         if (leaves.empty() || !isa<IndexType>(leaves.front().getType()))
           return Value();
         ArrayRef<Type> variants = type.getVariants();
-        SmallVector<Type> payloadTypes;
-        for (Type variant : variants)
-          if (!isa<NoneType>(variant))
-            payloadTypes.push_back(variant);
-        FailureOr<SmallVector<ValueRange>> slices = lowering::leafSlices(
-            converter, payloadTypes, leaves.drop_front());
+        SmallVector<TypeRange> payloads;
+        for (size_t index = 0; index != variants.size(); ++index)
+          payloads.push_back(payloadOf(variants, index));
+        FailureOr<SmallVector<ValueRange>> slices =
+            lowering::leafSlices(converter, payloads, leaves.drop_front());
         if (failed(slices))
           return Value();
 
         bool rebuilt = true;
-        unsigned slice = 0;
         scf::IndexSwitchOp select = createVariantSwitch(
             builder, loc, TypeRange{type}, leaves.front(), variants.size(),
             [&](size_t variant, Region &arm) {
               OpBuilder::InsertionGuard guard(builder);
               builder.createBlock(&arm);
+              FailureOr<SmallVector<Value>> payload = lowering::valuesFromLeaves(
+                  converter, builder, loc, payloads[variant], (*slices)[variant]);
               Value made;
-              if (isa<NoneType>(variants[variant])) {
-                made = MakeOp::create(builder, loc, type, int64_t(variant));
-              } else if (Value payload = lowering::valueFromLeaves(
-                             converter, builder, loc, variants[variant],
-                             (*slices)[slice++])) {
-                made = MakeOp::create(builder, loc, type,
-                                      builder.getIndexAttr(variant), payload);
+              if (succeeded(payload)) {
+                made = MakeOp::create(
+                    builder, loc, type, builder.getIndexAttr(variant),
+                    payload->empty() ? Value() : payload->front());
               } else {
                 // The arm still yields, so the switch stays valid while the
                 // materialization reports its failure.
@@ -126,11 +134,11 @@ void populateSumLeafConversion(ConversionTarget &, TypeConverter &converter,
         if (!type)
           return {};
         SmallVector<Value> leaves = {TagOp::create(builder, loc, value)};
-        for (auto [index, variant] : llvm::enumerate(type.getVariants())) {
-          if (isa<NoneType>(variant))
-            continue;
+        for (size_t index = 0, e = type.getVariants().size(); index != e;
+             ++index) {
           SmallVector<Type> payloadLeaves;
-          if (failed(converter.convertType(variant, payloadLeaves)))
+          if (failed(converter.convertTypes(payloadOf(type.getVariants(), index),
+                                            payloadLeaves)))
             return {};
           if (payloadLeaves.empty())
             continue;
