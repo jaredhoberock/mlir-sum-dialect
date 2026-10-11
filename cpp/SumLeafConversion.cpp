@@ -1,4 +1,5 @@
 #include "SumLeafConversion.hpp"
+#include "ConvertToSCF.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
@@ -14,21 +15,41 @@ namespace mlir::sum {
 namespace {
 
 /// The leaf standing for a payload leaf of `type` the sum does not carry. A
-/// buffer is an empty allocation in the automatic scope, which is legal wherever
-/// the conversion runs and which an alias analysis counts as a buffer of its own;
-/// any other leaf is upstream's absent value, a poison.
+/// buffer is an allocation in the automatic scope, which is legal wherever the
+/// conversion runs and which an alias analysis counts as a buffer of its own; any
+/// other leaf is upstream's absent value, a poison.
+///
+/// The buffer has the leaf's type exactly, its layout included: storage of an
+/// identity layout reinterpreted at the leaf's offset, sizes and strides, a
+/// dynamic offset or size read as 0 and a dynamic stride as 1. The storage holds
+/// as many elements as that view reaches, so a dynamically sized leaf's is empty,
+/// and a copy of the view reads only storage that exists: a static shape keeps its
+/// elements, and a rank-0 leaf, which holds exactly one element by its type, gets
+/// one. Null for a buffer whose layout is not strided.
 Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
   auto buffer = dyn_cast<MemRefType>(type);
   if (!buffer)
     return ub::PoisonOp::create(builder, loc, type);
-  SmallVector<int64_t> emptyShape(buffer.getRank(), 0);
-  auto emptyType =
-      MemRefType::get(emptyShape, buffer.getElementType(),
+  SmallVector<int64_t> strides;
+  int64_t offset;
+  if (failed(buffer.getStridesAndOffset(strides, offset)))
+    return Value();
+  int64_t viewOffset = ShapedType::isDynamic(offset) ? 0 : offset;
+  SmallVector<int64_t> viewSizes, viewStrides;
+  int64_t reach = viewOffset + 1;
+  for (auto [size, stride] : llvm::zip_equal(buffer.getShape(), strides)) {
+    viewSizes.push_back(ShapedType::isDynamic(size) ? 0 : size);
+    viewStrides.push_back(ShapedType::isDynamic(stride) ? 1 : stride);
+    reach += (viewSizes.back() - 1) * viewStrides.back();
+  }
+  if (llvm::is_contained(viewSizes, 0))
+    reach = 0;
+  auto storageType =
+      MemRefType::get({reach}, buffer.getElementType(),
                       MemRefLayoutAttrInterface{}, buffer.getMemorySpace());
-  Value empty = memref::AllocaOp::create(builder, loc, emptyType);
-  if (emptyType == buffer)
-    return empty;
-  return memref::CastOp::create(builder, loc, buffer, empty);
+  Value storage = memref::AllocaOp::create(builder, loc, storageType);
+  return memref::ReinterpretCastOp::create(builder, loc, buffer, storage,
+                                           viewOffset, viewSizes, viewStrides);
 }
 
 } // namespace
@@ -38,65 +59,59 @@ void populateSumLeafConversion(ConversionTarget &, TypeConverter &converter,
   converter.addConversion(
       [&converter](SumType type, SmallVectorImpl<Type> &leaves)
           -> std::optional<LogicalResult> {
-        leaves.push_back(IndexType::get(type.getContext()));
+        // A refusal leaves `leaves` as it found them, the converter's contract.
+        SmallVector<Type> sumLeaves = {IndexType::get(type.getContext())};
         for (Type variant : type.getVariants())
           if (!isa<NoneType>(variant) &&
-              failed(converter.convertType(variant, leaves)))
+              failed(converter.convertType(variant, sumLeaves)))
             return failure();
+        llvm::append_range(leaves, sumLeaves);
         return success();
       });
 
-  // The leaves are the tag and then each payload's leaves, consumed front to
-  // back; every payload is rebuilt before the switch, which yields the make of
-  // the variant the tag names. Variants 0 through n - 2 are cases and the last
-  // is the default, so every tag a sum of n variants holds has its arm.
+  // The leaves are the tag and then each payload's leaves. The switch on the
+  // tag selects the arm of the variant the tag names, and only that arm rebuilds
+  // its payload, so a payload the sum does not carry, a nested sum's tag
+  // included, is never read: the rebuild keeps the guard the take-apart states.
   converter.addSourceMaterialization(
       [&converter](OpBuilder &builder, SumType type, ValueRange leaves,
                    Location loc) -> Value {
         if (leaves.empty() || !isa<IndexType>(leaves.front().getType()))
           return Value();
-        Value tag = leaves.front();
-        leaves = leaves.drop_front();
         ArrayRef<Type> variants = type.getVariants();
-        SmallVector<Value> payloads(variants.size());
-        for (auto [index, variant] : llvm::enumerate(variants)) {
-          if (isa<NoneType>(variant))
-            continue;
-          SmallVector<Type> payloadLeaves;
-          if (failed(converter.convertType(variant, payloadLeaves)) ||
-              payloadLeaves.size() > leaves.size())
-            return Value();
-          payloads[index] = lowering::valueFromLeaves(
-              converter, builder, loc, variant,
-              leaves.take_front(payloadLeaves.size()));
-          if (!payloads[index])
-            return Value();
-          leaves = leaves.drop_front(payloadLeaves.size());
-        }
-        if (!leaves.empty())
+        SmallVector<Type> payloadTypes;
+        for (Type variant : variants)
+          if (!isa<NoneType>(variant))
+            payloadTypes.push_back(variant);
+        FailureOr<SmallVector<ValueRange>> slices = lowering::leafSlices(
+            converter, payloadTypes, leaves.drop_front());
+        if (failed(slices))
           return Value();
 
-        SmallVector<int64_t> cases;
-        for (int64_t index = 0; index + 1 < int64_t(variants.size()); ++index)
-          cases.push_back(index);
-        auto select = scf::IndexSwitchOp::create(builder, loc, TypeRange{type},
-                                                 tag, cases, cases.size());
-        for (auto [index, variant] : llvm::enumerate(variants)) {
-          Region &arm = index + 1 == variants.size()
-                            ? select.getDefaultRegion()
-                            : select.getCaseRegions()[index];
-          OpBuilder::InsertionGuard guard(builder);
-          builder.createBlock(&arm);
-          Value made =
-              payloads[index]
-                  ? MakeOp::create(builder, loc, type,
-                                   builder.getIndexAttr(index), payloads[index])
-                        .getResult()
-                  : MakeOp::create(builder, loc, type, int64_t(index))
-                        .getResult();
-          scf::YieldOp::create(builder, loc, made);
-        }
-        return select.getResult(0);
+        bool rebuilt = true;
+        unsigned slice = 0;
+        scf::IndexSwitchOp select = createVariantSwitch(
+            builder, loc, TypeRange{type}, leaves.front(), variants.size(),
+            [&](size_t variant, Region &arm) {
+              OpBuilder::InsertionGuard guard(builder);
+              builder.createBlock(&arm);
+              Value made;
+              if (isa<NoneType>(variants[variant])) {
+                made = MakeOp::create(builder, loc, type, int64_t(variant));
+              } else if (Value payload = lowering::valueFromLeaves(
+                             converter, builder, loc, variants[variant],
+                             (*slices)[slice++])) {
+                made = MakeOp::create(builder, loc, type,
+                                      builder.getIndexAttr(variant), payload);
+              } else {
+                // The arm still yields, so the switch stays valid while the
+                // materialization reports its failure.
+                rebuilt = false;
+                made = ub::PoisonOp::create(builder, loc, type);
+              }
+              scf::YieldOp::create(builder, loc, made);
+            });
+        return rebuilt ? select.getResult(0) : Value();
       });
 
   // A payload is read only under its own variant's guard, the precondition
@@ -134,8 +149,12 @@ void populateSumLeafConversion(ConversionTarget &, TypeConverter &converter,
             scf::YieldOp::create(builder, loc, carried);
             builder.setInsertionPointToStart(read.elseBlock());
             SmallVector<Value> absent;
-            for (Type leaf : payloadLeaves)
-              absent.push_back(absentLeaf(builder, loc, leaf));
+            for (Type leaf : payloadLeaves) {
+              Value stand = absentLeaf(builder, loc, leaf);
+              if (!stand)
+                return {};
+              absent.push_back(stand);
+            }
             scf::YieldOp::create(builder, loc, absent);
           }
           llvm::append_range(leaves, read.getResults());

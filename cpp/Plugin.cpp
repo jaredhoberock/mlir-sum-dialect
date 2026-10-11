@@ -1,5 +1,6 @@
 #include "ConvertToSCF.hpp"
 #include "Sum.hpp"
+#include "TestLeafRoundtripPass.hpp"
 #include "TestPayloadPass.hpp"
 #include "LoweringContribution.hpp"
 #include <mlir/Tools/Plugins/DialectPlugin.h>
@@ -9,6 +10,7 @@ LOWERING_DEFINE_PLUGIN_CONTRACT_VERSION()
 static void registerPlugin(mlir::DialectRegistry* registry) {
   registry->insert<mlir::sum::SumDialect>();
   ::mlir::PassRegistration<::mlir::sum::ConvertSumToSCFPass>();
+  ::mlir::PassRegistration<::mlir::sum::TestLeafRoundtripPass>();
   ::mlir::PassRegistration<::mlir::sum::TestPayloadSourcesPass>();
 }
 
