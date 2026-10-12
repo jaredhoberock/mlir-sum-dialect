@@ -21,7 +21,12 @@ def plugin(env_var, fallback):
 
 config.name = "Sum Dialect Tests"
 sum_plugin = plugin('SUM_DIALECT_PLUGIN', os.path.join(os.path.dirname(__file__), '..', 'build', 'libsum_dialect.so'))
-config.substitutions.append(('mlir-opt', f'{tool('mlir-opt')} --load-dialect-plugin={sum_plugin}'))
+# The lowering driver's pass plugin registers `leaf-conversion`, so a row runs the
+# sum's leaf contribution at every boundary the conversion flattens. Its passes
+# reach the registry while the command line is read, so a row names them in a
+# -pass-pipeline.
+driver_plugin = plugin('LOWERING_DRIVER_PLUGIN', os.path.join(os.path.dirname(__file__), '../../../mlir-lowering-driver/cpp/build/liblowering_driver.so'))
+config.substitutions.append(('mlir-opt', f'{tool('mlir-opt')} --load-dialect-plugin={sum_plugin} --load-pass-plugin={driver_plugin}'))
 config.substitutions.append(('mlir-runner', tool('mlir-runner')))
 config.substitutions.append(('%mlir_c_runner_utils', os.path.join(llvm_lib, 'libmlir_c_runner_utils.so')))
 config.substitutions.append(('FileCheck', tool('FileCheck')))

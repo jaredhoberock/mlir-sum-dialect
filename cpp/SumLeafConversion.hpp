@@ -18,7 +18,9 @@ namespace sum {
 /// absent: an automatic allocation with the leaf's type for a buffer, holding no
 /// element unless the type fixes some, and `ub.poison` for anything else. In both
 /// directions a payload is read only where the value carries it. Payloads convert
-/// and materialize through `converter`, whatever dialect owns them.
+/// and materialize through `converter`, whatever dialect owns them. The switch
+/// the source materialization builds is legal under `target`, so the leaf
+/// conversion does not flatten its own rebuild again.
 void populateSumLeafConversion(ConversionTarget &target, TypeConverter &converter,
                                RewritePatternSet &patterns);
 

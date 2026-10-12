@@ -1,3 +1,4 @@
+#include "RebuiltSum.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
@@ -5,6 +6,7 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/IR/PatternMatch.h>
 
 #define GET_OP_CLASSES
 #include <SumOps.cpp.inc>
@@ -30,20 +32,38 @@ LogicalResult GetOp::verify() {
            << idx << " out of range for sum type with "
            << numVariants << " variants";
 
-  Type expectedTy = sumTy.getVariantType(idx);
-
-  // Reject nullary variants
-  if (isa<NoneType>(expectedTy))
+  ArrayRef<Type> payload = sumTy.getPayloadTypes(idx);
+  if (payload.empty())
     return emitOpError("cannot extract payload from nullary variant ")
            << idx;
 
   Type actualTy = getPayload().getType();
-  if (actualTy != expectedTy)
+  if (actualTy != payload.front())
     return emitOpError("result type ")
            << actualTy << " does not match variant " << idx
-           << " payload type " << expectedTy;
+           << " payload type " << payload.front();
 
   return success();
+}
+
+/// The payload of variant k where the sum is built in view: a make of variant k
+/// gives its payload, and a rebuilt sum gives the payload its arm k makes when
+/// that payload is defined outside the arm, so it dominates the read. A make of
+/// another variant declines, since the read's precondition does not hold there
+/// and no value is the right answer.
+OpFoldResult GetOp::fold(FoldAdaptor) {
+  uint64_t index = getIndex().getZExtValue();
+  if (auto make = getInput().getDefiningOp<MakeOp>()) {
+    if (make.getIndex().getZExtValue() == index)
+      return make.getPayload();
+    return {};
+  }
+  if (std::optional<RebuiltSum> rebuilt = RebuiltSum::match(getInput())) {
+    Value payload = rebuilt->getMake(index).getPayload();
+    if (!rebuilt->getArm(index).isAncestor(payload.getParentRegion()))
+      return payload;
+  }
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -64,15 +84,42 @@ LogicalResult IsVariantOp::verify() {
   return success();
 }
 
-OpFoldResult IsVariantOp::fold(FoldAdaptor adaptor) {
-  auto makeOp = getInput().getDefiningOp<MakeOp>();
-  if (!makeOp)
+/// Whether a make holds variant k is whether it makes variant k.
+OpFoldResult IsVariantOp::fold(FoldAdaptor) {
+  auto make = getInput().getDefiningOp<MakeOp>();
+  if (!make)
     return {};
+  return BoolAttr::get(getContext(), make.getIndex() == getIndex());
+}
 
-  bool match = makeOp.getIndex() == getIndex();
-  OpBuilder builder(getContext());
-  builder.setInsertionPoint(getOperation());
-  return arith::ConstantOp::create(builder, getLoc(), builder.getBoolAttr(match)).getResult();
+namespace {
+
+/// Whether a rebuilt sum holds variant k, read off its tag: the tag equals k
+/// for a variant its switch has a case for, and the last variant's default arm
+/// takes every tag from n - 1 up.
+struct IsVariantOfRebuiltSum : OpRewritePattern<IsVariantOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(IsVariantOp op,
+                                PatternRewriter &rewriter) const override {
+    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
+    if (!rebuilt)
+      return failure();
+    uint64_t index = op.getIndex().getZExtValue();
+    bool last = index + 1 == rebuilt->getNumVariants();
+    Value variant = arith::ConstantIndexOp::create(rewriter, op.getLoc(), index);
+    rewriter.replaceOpWithNewOp<arith::CmpIOp>(
+        op, last ? arith::CmpIPredicate::uge : arith::CmpIPredicate::eq,
+        rebuilt->getTag(), variant);
+    return success();
+  }
+};
+
+} // namespace
+
+void IsVariantOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                              MLIRContext *context) {
+  patterns.add<IsVariantOfRebuiltSum>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -87,17 +134,15 @@ LogicalResult MakeOp::verify() {
   if (index >= numVariants)
     return emitOpError("variant index ") << index << " is out of bounds for sum type with " << numVariants << " variants";
 
-  Type variantTy = sumType.getVariantType(index);
-  bool isNullary = isa<NoneType>(variantTy);
-
-  if (isNullary) {
+  ArrayRef<Type> payload = sumType.getPayloadTypes(index);
+  if (payload.empty()) {
     if (getPayload())
       return emitOpError("nullary variant ") << index << " must not have a payload";
   } else {
     if (!getPayload())
       return emitOpError("variant ") << index << " requires a payload";
-    if (getPayload().getType() != variantTy)
-      return emitOpError("payload type ") << getPayload().getType() << " does not match variant type " << variantTy;
+    if (getPayload().getType() != payload.front())
+      return emitOpError("payload type ") << getPayload().getType() << " does not match variant type " << payload.front();
   }
 
   return success();
@@ -136,10 +181,8 @@ ParseResult MakeOp::parse(OpAsmParser &parser, OperationState &result) {
   if (index >= (int64_t)numVariants)
     return parser.emitError(parser.getNameLoc(), "variant index out of bounds");
 
-  Type variantTy = resultType.getVariantType(index);
-  bool isNullary = isa<NoneType>(variantTy);
-
-  if (isNullary) {
+  ArrayRef<Type> payloadTypes = resultType.getPayloadTypes(index);
+  if (payloadTypes.empty()) {
     if (hasPayload)
       return parser.emitError(parser.getCurrentLocation(),
                                "nullary variant must not have a payload");
@@ -147,7 +190,7 @@ ParseResult MakeOp::parse(OpAsmParser &parser, OperationState &result) {
     if (!hasPayload)
       return parser.emitError(parser.getCurrentLocation(),
                                "expected payload operand for non-nullary variant");
-    if (parser.resolveOperand(payload, variantTy, result.operands))
+    if (parser.resolveOperand(payload, payloadTypes.front(), result.operands))
       return failure();
   }
 
@@ -218,21 +261,19 @@ ParseResult MatchOp::parse(OpAsmParser &parser, OperationState &result) {
       return parser.emitError(parser.getCurrentLocation(),
                                "expected case ") << i << ", got " << caseIndex;
 
-    Type variantTy = inputType.getVariantType(i);
-    bool isNullary = isa<NoneType>(variantTy);
+    ArrayRef<Type> payloadTypes = inputType.getPayloadTypes(i);
 
+    // A case takes its variant's payload as its block argument, and a nullary
+    // case takes none: (%arg: type)
     SmallVector<OpAsmParser::Argument> args;
-    if (isNullary) {
-      // Nullary variant: no block arguments
-    } else {
-      // Parse: (%arg: type)
+    if (!payloadTypes.empty()) {
       if (parser.parseArgumentList(args, OpAsmParser::Delimiter::Paren, true))
         return failure();
 
       if (args.size() != 1)
         return parser.emitError(parser.getCurrentLocation(),
                                  "expected exactly one argument for case ") << i;
-      if (args[0].type != variantTy)
+      if (args[0].type != payloadTypes.front())
         return parser.emitError(parser.getCurrentLocation(),
                                  "argument type mismatch for case ") << i;
     }
@@ -259,10 +300,7 @@ void MatchOp::print(OpAsmPrinter &p) {
   auto sumType = cast<SumTypeInterface>(getInput().getType());
   for (auto [i, caseRegion] : llvm::enumerate(getCases())) {
     p.printNewline();
-    Type variantTy = sumType.getVariantType(i);
-    bool isNullary = isa<NoneType>(variantTy);
-
-    if (isNullary) {
+    if (sumType.getPayloadTypes(i).empty()) {
       p << "case " << i << " ";
     } else {
       p << "case " << i << " (";
@@ -284,18 +322,16 @@ LogicalResult MatchOp::verify() {
   // Check each case
   for (auto [i, caseRegion] : llvm::enumerate(getCases())) {
     Block &block = caseRegion.front();
-    Type variantTy = sumType.getVariantType(i);
-    bool isNullary = isa<NoneType>(variantTy);
-
-    if (isNullary) {
+    ArrayRef<Type> payloadTypes = sumType.getPayloadTypes(i);
+    if (payloadTypes.empty()) {
       if (block.getNumArguments() != 0)
         return emitOpError("case ") << i << " (nullary) expected 0 arguments, got " << block.getNumArguments();
     } else {
       if (block.getNumArguments() != 1)
         return emitOpError("case ") << i << " expected 1 argument, got " << block.getNumArguments();
-      if (block.getArgument(0).getType() != variantTy)
+      if (block.getArgument(0).getType() != payloadTypes.front())
         return emitOpError("case ") << i << " argument type " << block.getArgument(0).getType()
-                                    << " does not match variant type " << variantTy;
+                                    << " does not match variant type " << payloadTypes.front();
     }
 
     auto yield = cast<YieldOp>(block.getTerminator());
@@ -349,6 +385,39 @@ LogicalResult TagOp::verify() {
     return emitOpError("cannot take tag of zero-variant sum type");
 
   return success();
+}
+
+/// The tag of a make is the variant it makes.
+OpFoldResult TagOp::fold(FoldAdaptor) {
+  if (auto make = getInput().getDefiningOp<MakeOp>())
+    return make.getIndexAttr();
+  return {};
+}
+
+namespace {
+
+/// The tag of a rebuilt sum is its switch's tag clamped to the last variant,
+/// min(tag, n - 1), since the default arm takes every tag past the cases.
+struct TagOfRebuiltSum : OpRewritePattern<TagOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TagOp op,
+                                PatternRewriter &rewriter) const override {
+    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
+    if (!rebuilt)
+      return failure();
+    Value last = arith::ConstantIndexOp::create(rewriter, op.getLoc(),
+                                                rebuilt->getNumVariants() - 1);
+    rewriter.replaceOpWithNewOp<arith::MinUIOp>(op, rebuilt->getTag(), last);
+    return success();
+  }
+};
+
+} // namespace
+
+void TagOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                        MLIRContext *context) {
+  patterns.add<TagOfRebuiltSum>(context);
 }
 
 } // end mlir::sum

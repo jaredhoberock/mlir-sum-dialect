@@ -10,6 +10,10 @@ def SumDialect : Dialect {
 
   let useDefaultTypePrinterParser = 1;
 
+  // a read of a sum built where it is read folds to the index or flag it
+  // reads, which materializes as an arith constant
+  let hasConstantMaterializer = 1;
+
   let extraClassDeclaration = [{
     void registerTypes();
   }];

@@ -35,6 +35,7 @@ def GetOp : SumDialectOp<"get", [Pure]> {
   let results = (outs AnyType:$payload);
 
   let hasVerifier = 1;
+  let hasFolder = 1;
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input)) `->` type($payload)";
 
   let builders = [
@@ -63,6 +64,7 @@ def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
   
   let hasVerifier = 1;
   let hasFolder = 1;
+  let hasCanonicalizer = 1;
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input))";
 
   let builders = [
@@ -166,6 +168,8 @@ def TagOp : SumDialectOp<"tag", [Pure]> {
   let results = (outs Index:$tag);
 
   let hasVerifier = 1;
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
   let assemblyFormat = "$input attr-dict `:` qualified(type($input))";
 
   let builders = [

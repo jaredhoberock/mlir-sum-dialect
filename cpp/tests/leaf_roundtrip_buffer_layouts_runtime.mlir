@@ -1,13 +1,14 @@
-// RUN: mlir-opt --pass-pipeline="builtin.module(test-sum-leaf-roundtrip,llvm-target-to-data-layout,convert-sum-to-scf,convert-scf-to-cf,convert-to-llvm,reconcile-unrealized-casts)" %s \
+// RUN: mlir-opt --pass-pipeline="builtin.module(leaf-conversion,llvm-target-to-data-layout,convert-sum-to-scf,convert-scf-to-cf,convert-to-llvm,reconcile-unrealized-casts)" %s \
 // RUN: | mlir-runner --entry-point-result=void --shared-libs=%mlir_c_runner_utils \
 // RUN: | FileCheck %s
 
 // A sum whose payload is a buffer of a static shape, of a static non-unit stride
-// with a static offset, of a dynamic offset, or of rank zero crosses as its
-// leaves and is rebuilt, on the path that holds the buffer and on the path that
-// does not. Where the sum holds no buffer its leaf is a stand-in of the buffer's
-// own type, so each function verifies and runs: a held buffer reads back its
-// element, and an absent one takes the empty arm.
+// with a static offset, of a dynamic offset, of rank zero, or of a stride
+// stepping backward crosses every function boundary and every scf.if result as
+// its leaves and is rebuilt where it is read whole, on the path that holds the
+// buffer and on the path that does not. Where the sum holds no buffer its leaf
+// is a stand-in of the buffer's own type, so each function verifies and runs: a
+// held buffer reads back its element, and an absent one takes the empty arm.
 
 // CHECK: 5
 // CHECK-NEXT: 42
@@ -17,10 +18,13 @@
 // CHECK-NEXT: 42
 // CHECK-NEXT: 3
 // CHECK-NEXT: 42
+// CHECK-NEXT: 2
+// CHECK-NEXT: 42
 !S0 = !sum.sum<(memref<4xi64>, none)>
 !S1 = !sum.sum<(memref<?xi64, strided<[2], offset: 1>>, none)>
 !S2 = !sum.sum<(memref<?xi64, strided<[2], offset: ?>>, none)>
 !S3 = !sum.sum<(memref<i64>, none)>
+!S4 = !sum.sum<(memref<4xi64, strided<[-1], offset: 3>>, none)>
 module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu", chip = "">} {
   func.func private @printI64(i64)
   func.func private @printNewline()
@@ -64,6 +68,16 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
       scf.yield %s : !S3
     }
     return %r : !S3
+  }
+  func.func private @f4(%held: i1, %m: memref<4xi64, strided<[-1], offset: 3>>) -> !S4 {
+    %r = scf.if %held -> !S4 {
+      %s = sum.make 0 %m : !S4
+      scf.yield %s : !S4
+    } else {
+      %s = sum.make 1 : !S4
+      scf.yield %s : !S4
+    }
+    return %r : !S4
   }
 
   // Prints element `%i` of the buffer `%v` holds, or 42 when it holds none.
@@ -113,6 +127,21 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
     %e = sum.match %v : !S3 -> i64
     case 0 (%m: memref<i64>) {
       %x = memref.load %m[] : memref<i64>
+      yield %x : i64
+    }
+    case 1 {
+      %c = arith.constant 42 : i64
+      yield %c : i64
+    }
+    func.call @printI64(%e) : (i64) -> ()
+    func.call @printNewline() : () -> ()
+    return
+  }
+
+  func.func private @show4(%v: !S4, %i: index) {
+    %e = sum.match %v : !S4 -> i64
+    case 0 (%m: memref<4xi64, strided<[-1], offset: 3>>) {
+      %x = memref.load %m[%i] : memref<4xi64, strided<[-1], offset: 3>>
       yield %x : i64
     }
     case 1 {
@@ -174,6 +203,14 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
     func.call @show3(%a3) : (!S3) -> ()
     %b3 = func.call @f3(%false, %m3i) : (i1, memref<i64>) -> !S3
     func.call @show3(%b3) : (!S3) -> ()
+
+    // Element 1 of the view at offset 3, stride -1 is store[2].
+    %m4 = memref.reinterpret_cast %store to offset: [3], sizes: [4], strides: [-1]
+        : memref<9xi64> to memref<4xi64, strided<[-1], offset: 3>>
+    %a4 = func.call @f4(%true, %m4) : (i1, memref<4xi64, strided<[-1], offset: 3>>) -> !S4
+    func.call @show4(%a4, %c1) : (!S4, index) -> ()
+    %b4 = func.call @f4(%false, %m4) : (i1, memref<4xi64, strided<[-1], offset: 3>>) -> !S4
+    func.call @show4(%b4, %c1) : (!S4, index) -> ()
     return
   }
 }

@@ -20,6 +20,19 @@ def SumTypeInterface : TypeInterface<"SumTypeInterface"> {
                     /*defaultImplementation=*/[{
                       return $_type.getVariants()[index];
                     }]>,
+    InterfaceMethod<[{
+      Return the types of the payload variant `index` carries: its variant
+      type, or none for a variant whose type is `none`, which carries no
+      payload.
+    }],
+                    "::llvm::ArrayRef<::mlir::Type>", "getPayloadTypes",
+                    (ins "size_t":$index), /*methodBody=*/[{}],
+                    /*defaultImplementation=*/[{
+                      ::llvm::ArrayRef<::mlir::Type> variants = $_type.getVariants();
+                      if (::llvm::isa<::mlir::NoneType>(variants[index]))
+                        return {};
+                      return variants.slice(index, 1);
+                    }]>,
   ];
 
   let extraClassOf = [{

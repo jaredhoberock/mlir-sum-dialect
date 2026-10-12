@@ -68,6 +68,11 @@ struct LoweringContribution : lowering::LoweringContributionInterface {
 };
 } // namespace
 
+Operation *SumDialect::materializeConstant(OpBuilder &builder, Attribute value,
+                                           Type type, Location loc) {
+  return arith::ConstantOp::materialize(builder, value, type, loc);
+}
+
 void SumDialect::initialize() {
   addOperations<
 #define GET_OP_LIST

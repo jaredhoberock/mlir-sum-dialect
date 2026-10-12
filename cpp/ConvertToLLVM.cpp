@@ -147,10 +147,12 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
     MLIRContext *ctx = sumTy.getContext();
     SmallVector<Type> fields = {
         IntegerType::get(ctx, sumTy.getSizeOfTagInBytes() * 8)};
-    for (Type variant : sumTy.getVariants()) {
-      Type lowered = isa<NoneType>(variant)
+    for (size_t index = 0, e = sumTy.getVariants().size(); index != e;
+         ++index) {
+      ArrayRef<Type> payload = sumTy.getPayloadTypes(index);
+      Type lowered = payload.empty()
                          ? LLVM::LLVMStructType::getLiteral(ctx, {})
-                         : typeConverter.convertType(variant);
+                         : typeConverter.convertType(payload.front());
       if (!lowered)
         return std::nullopt;
       fields.push_back(lowered);

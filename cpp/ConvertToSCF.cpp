@@ -24,8 +24,7 @@ struct MatchOpLowering : OpRewritePattern<MatchOp> {
         [&](size_t i, Region &tgtRegion) {
           Region &srcRegion = op.getCases()[i];
 
-          Type variantTy = sumTy.getVariantType(i);
-          bool isNullary = isa<NoneType>(variantTy);
+          bool isNullary = sumTy.getPayloadTypes(i).empty();
 
           Block *entryBlock = rewriter.createBlock(&tgtRegion);
           rewriter.setInsertionPointToStart(entryBlock);
