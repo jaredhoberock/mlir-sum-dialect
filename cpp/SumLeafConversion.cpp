@@ -9,6 +9,7 @@
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Transforms/DialectConversion.h>
 
 namespace mlir::sum {
@@ -55,9 +56,28 @@ Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
                                            viewOffset, viewSizes, viewStrides);
 }
 
+bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter);
+
+/// Whether every operation of `arm` but its terminator rebuilds from values
+/// defined outside the switch: a nested rebuild (isLeafRebuild), or an operation
+/// free of memory effects and speculatable, as the makes the materialization
+/// mints are. An arm that allocates, reads or writes memory, or calls computes
+/// its payload rather than rebuilding it.
+bool rebuildsFromOutside(Region &arm, const TypeConverter &converter) {
+  for (Operation &op : arm.front().without_terminator()) {
+    auto nested = dyn_cast<scf::IndexSwitchOp>(op);
+    if (!(nested && isLeafRebuild(nested, converter)) && !isPure(&op))
+      return false;
+  }
+  return true;
+}
+
 /// Whether `select` is the source materialization's rebuild of a sum
-/// (RebuiltSum) whose every payload is a leaf under `converter` defined outside
-/// the switch or is built inside its own arm from leaves.
+/// (RebuiltSum) exactly: every arm rebuilds from values defined outside the
+/// switch (rebuildsFromOutside), and a payload defined outside is a leaf under
+/// `converter`. A switch whose arm computes a buffer is no rebuild, so the
+/// conversion flattens it and the buffer crosses as a leaf of its results
+/// instead of hiding inside the sum.
 bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter) {
   if (select->getNumResults() != 1)
     return false;
@@ -66,9 +86,11 @@ bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter) {
     return false;
   for (size_t variant = 0, e = rebuilt->getNumVariants(); variant != e;
        ++variant) {
+    Region &arm = rebuilt->getArm(variant);
+    if (!rebuildsFromOutside(arm, converter))
+      return false;
     Value payload = rebuilt->getMake(variant).getPayload();
-    if (payload &&
-        !rebuilt->getArm(variant).isAncestor(payload.getParentRegion()) &&
+    if (payload && !arm.isAncestor(payload.getParentRegion()) &&
         !converter.isLegal(payload.getType()))
       return false;
   }
