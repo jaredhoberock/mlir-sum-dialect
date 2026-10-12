@@ -59,7 +59,7 @@ void addConvertSumToSCF(MlirOpPassManager pm, void *) {
 void *sumLegality(MlirOperation, void *targetPtr, void *, void *) {
   auto &target = *static_cast<ConversionTarget *>(targetPtr);
   target.markUnknownOpDynamicallyLegal(
-      [](Operation *op) { return op->getName().getStringRef() != "sum.match"; });
+      [](Operation *op) { return !isa<MatchOp>(op); });
   return nullptr;
 }
 

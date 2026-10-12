@@ -5,6 +5,7 @@
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
 #include <LeafConversion.hpp>
+#include <StridedEnvelope.hpp>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
@@ -24,12 +25,11 @@ namespace {
 /// The buffer has the leaf's type exactly, its layout included: storage of an
 /// identity layout reinterpreted at the leaf's offset, sizes and strides, a
 /// dynamic offset or size read as 0 and a dynamic stride as 1. The storage holds
-/// offset + sum of max(0, (size - 1) * stride) + 1 elements, or none when a size
-/// is 0: one past the highest element the view addresses, so a dynamically sized
+/// the view's envelope (lowering::stridedEnvelope), so a dynamically sized
 /// leaf's storage is empty and a rank-0 leaf, which holds one element by its
-/// type, gets one. A stride stepping backward adds nothing to that envelope; the
-/// view is never read, since no variant carries it, and a copy of it copies the
-/// envelope from its base. Null for a buffer whose layout is not strided.
+/// type, gets one; the view is never read, since no variant carries it, and a
+/// copy of it copies the envelope from its base. Null for a buffer whose layout
+/// is not strided.
 Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
   auto buffer = dyn_cast<MemRefType>(type);
   if (!buffer)
@@ -40,14 +40,14 @@ Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
     return Value();
   int64_t viewOffset = ShapedType::isDynamic(offset) ? 0 : offset;
   SmallVector<int64_t> viewSizes, viewStrides;
-  int64_t reach = viewOffset + 1;
   for (auto [size, stride] : llvm::zip_equal(buffer.getShape(), strides)) {
     viewSizes.push_back(ShapedType::isDynamic(size) ? 0 : size);
     viewStrides.push_back(ShapedType::isDynamic(stride) ? 1 : stride);
-    reach += std::max<int64_t>(0, (viewSizes.back() - 1) * viewStrides.back());
   }
-  if (llvm::is_contained(viewSizes, 0))
-    reach = 0;
+  int64_t reach = *getConstantIntValue(lowering::stridedEnvelope(
+      builder, loc, builder.getIndexAttr(viewOffset),
+      getAsIndexOpFoldResult(builder.getContext(), viewSizes),
+      getAsIndexOpFoldResult(builder.getContext(), viewStrides)));
   auto storageType =
       MemRefType::get({reach}, buffer.getElementType(),
                       MemRefLayoutAttrInterface{}, buffer.getMemorySpace());
