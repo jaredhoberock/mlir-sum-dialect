@@ -99,9 +99,7 @@ bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter) {
 
 } // namespace
 
-void populateSumLeafConversion(ConversionTarget &target,
-                               TypeConverter &converter,
-                               RewritePatternSet &) {
+void populateSumLeafTypes(TypeConverter &converter) {
   converter.addConversion(
       [&converter](SumType type, SmallVectorImpl<Type> &leaves)
           -> std::optional<LogicalResult> {
@@ -157,26 +155,6 @@ void populateSumLeafConversion(ConversionTarget &target,
         return rebuilt ? select.getResult(0) : Value();
       });
 
-  // The rebuild is an scf.index_switch carrying the sum, a boundary the
-  // structural conversion would flatten into another rebuild for its every
-  // reader. It and the yields of its arms are legal instead, so one run of the
-  // conversion leaves it standing, a read of it folds where the canonicalizer
-  // can see through it (RebuiltSum), and a reader of the whole sum keeps the
-  // switch. Every other switch and yield defers to the boundary's rule.
-  target.addDynamicallyLegalOp<scf::IndexSwitchOp>(
-      [&converter](scf::IndexSwitchOp select) -> std::optional<bool> {
-        if (isLeafRebuild(select, converter))
-          return true;
-        return std::nullopt;
-      });
-  target.addDynamicallyLegalOp<scf::YieldOp>(
-      [&converter](scf::YieldOp yield) -> std::optional<bool> {
-        auto select = dyn_cast<scf::IndexSwitchOp>(yield->getParentOp());
-        if (select && isLeafRebuild(select, converter))
-          return true;
-        return std::nullopt;
-      });
-
   // A payload is read only under its own variant's guard, the precondition
   // `sum.get` states; the other path yields the payload's absent leaves.
   converter.addTargetMaterialization(
@@ -223,6 +201,30 @@ void populateSumLeafConversion(ConversionTarget &target,
           llvm::append_range(leaves, read.getResults());
         }
         return leaves;
+      });
+}
+
+void populateSumLeafLegality(ConversionTarget &target,
+                             const TypeConverter &converter,
+                             RewritePatternSet &) {
+  // The rebuild is an scf.index_switch carrying the sum, a boundary the
+  // structural conversion would flatten into another rebuild for its every
+  // reader. It and the yields of its arms are legal instead, so one run of the
+  // conversion leaves it standing, a read of it folds where the canonicalizer
+  // can see through it (RebuiltSum), and a reader of the whole sum keeps the
+  // switch. Every other switch and yield defers to the boundary's rule.
+  target.addDynamicallyLegalOp<scf::IndexSwitchOp>(
+      [&converter](scf::IndexSwitchOp select) -> std::optional<bool> {
+        if (isLeafRebuild(select, converter))
+          return true;
+        return std::nullopt;
+      });
+  target.addDynamicallyLegalOp<scf::YieldOp>(
+      [&converter](scf::YieldOp yield) -> std::optional<bool> {
+        auto select = dyn_cast<scf::IndexSwitchOp>(yield->getParentOp());
+        if (select && isLeafRebuild(select, converter))
+          return true;
+        return std::nullopt;
       });
 }
 

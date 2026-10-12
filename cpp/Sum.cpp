@@ -34,9 +34,14 @@ struct ConvertToLLVMInterface : public mlir::ConvertToLLVMPatternInterface {
 struct LeafConversionInterface : public lowering::LeafConversionInterface {
   using lowering::LeafConversionInterface::LeafConversionInterface;
 
-  void populateLeafConversion(ConversionTarget &target, TypeConverter &converter,
-                              RewritePatternSet &patterns) const override final {
-    populateSumLeafConversion(target, converter, patterns);
+  void populateLeafTypes(TypeConverter &converter) const override final {
+    populateSumLeafTypes(converter);
+  }
+
+  void populateLeafLegality(ConversionTarget &target,
+                            const TypeConverter &converter,
+                            RewritePatternSet &patterns) const override final {
+    populateSumLeafLegality(target, converter, patterns);
   }
 };
 
@@ -51,7 +56,7 @@ void addConvertSumToSCF(MlirOpPassManager pm, void *) {
 /// has an opinion on every operation (the sum.tag and sum.get it mints are left
 /// for the terminal's LLVM lowering). It rewrites no type, so it hands back no
 /// converter.
-void *sumLegality(MlirOperation, void *targetPtr, void *) {
+void *sumLegality(MlirOperation, void *targetPtr, void *, void *) {
   auto &target = *static_cast<ConversionTarget *>(targetPtr);
   target.markUnknownOpDynamicallyLegal(
       [](Operation *op) { return op->getName().getStringRef() != "sum.match"; });
