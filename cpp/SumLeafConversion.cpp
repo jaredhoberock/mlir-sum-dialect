@@ -9,6 +9,7 @@
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
+#include <mlir/Dialect/Utils/StaticValueUtils.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Transforms/DialectConversion.h>
@@ -25,9 +26,9 @@ namespace {
 /// The buffer has the leaf's type exactly, its layout included: storage of an
 /// identity layout reinterpreted at the leaf's offset, sizes and strides, a
 /// dynamic offset or size read as 0 and a dynamic stride as 1. The storage holds
-/// the view's envelope (lowering::stridedEnvelope), so a dynamically sized
-/// leaf's storage is empty and a rank-0 leaf, which holds one element by its
-/// type, gets one; the view is never read, since no variant carries it, and a
+/// the view's envelope (lowering::stridedEnvelope, which folds to a constant
+/// over those static values), so a dynamically sized leaf's storage is empty and
+/// a rank-0 leaf, which holds one element by its type, gets one; the view is never read, since no variant carries it, and a
 /// copy of it copies the envelope from its base. Null for a buffer whose layout
 /// is not strided.
 Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
