@@ -1,5 +1,6 @@
 #include "RebuiltSum.hpp"
 #include "SumTypeInterface.hpp"
+#include <llvm/ADT/SmallPtrSet.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/IRMapping.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
@@ -144,6 +145,16 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
       if (value != sum && definition->getBlock() == branch->getBlock() &&
           !definition->isBeforeInBlock(branch))
         return failure();
+
+  // Each reader arm is copied into at most one arm. A switch's default can
+  // stand for several variants; copying it into each of their arms would split
+  // the lanes that run it together into divergent copies, so a default two arms
+  // reach keeps the reader where it is.
+  llvm::SmallPtrSet<Region *, 4> reached;
+  for (size_t arm = 0, e = getNumArms(); arm != e; ++arm)
+    if (!reached.insert(&readerArm(reader, makes[arm].getIndex().getZExtValue()))
+             .second)
+      return failure();
 
   // Each arm runs the reader's arm of its variant, and its yield carries that
   // arm's results after its own; the operation is rebuilt with the added

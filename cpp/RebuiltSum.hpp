@@ -59,8 +59,9 @@ public:
   /// variant it makes, with the sum read as its make and a match arm's argument
   /// as the make's payload, and yields that arm's results beside its own; the
   /// reader's results become the operation's added results. An arm of the
-  /// reader no arm makes the variant of is dropped, and none is copied twice,
-  /// since no two arms make one variant. The reader runs at the operation's
+  /// reader no arm makes the variant of is dropped, and none is copied twice:
+  /// no two arms make one variant, and a switch reader whose default stands for
+  /// the variants of two arms is refused. The reader runs at the operation's
   /// place instead of its own, so it must follow the operation in its block
   /// past only operations free of memory effects and read nothing defined
   /// between them; fails, changing nothing, otherwise.

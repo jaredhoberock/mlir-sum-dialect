@@ -5,8 +5,9 @@
 // the branch: each arm runs the match's case of the variant it makes on its own
 // make's payload and yields that case's results beside its own, so the sum is
 // built only for the readers that remain. A case no arm makes the variant of is
-// dropped. The reader runs at the branch's place, so an operation with memory
-// effects between them keeps it where it is.
+// dropped, and a reader arm two arms would run keeps the reader where it is.
+// The reader runs at the branch's place, so an operation with memory effects
+// between them keeps it where it is.
 
 !O = !sum.sum<(i64, none)>
 !T = !sum.sum<(i64, none, f32)>
@@ -215,6 +216,40 @@ func.func @match_after_a_store(%c: i1, %x: i64, %buffer: memref<i64>) -> i64 {
   case 1 {
     %zero = arith.constant 0 : i64
     sum.yield %zero : i64
+  }
+  return %r : i64
+}
+
+// A switch on the tag whose default stands for variants 1 and 2, each made by
+// its own arm: sinking would copy the default into both arms, so the reader
+// stays where it is and its default runs once.
+// CHECK-LABEL: func.func @switch_whose_default_two_arms_reach
+// CHECK: "test.big"
+// CHECK-NOT: "test.big"
+// CHECK: return
+func.func @switch_whose_default_two_arms_reach(%tag: index, %x: i64, %y: f32) -> i64 {
+  %s = scf.index_switch %tag -> !T
+  case 0 {
+    %m = sum.make 0 %x : !T
+    scf.yield %m : !T
+  }
+  case 1 {
+    %m = sum.make 1 : !T
+    scf.yield %m : !T
+  }
+  default {
+    %m = sum.make 2 %y : !T
+    scf.yield %m : !T
+  }
+  %t = sum.tag %s : !T
+  %r = scf.index_switch %t -> i64
+  case 0 {
+    %v = sum.get %s, 0 : !T -> i64
+    scf.yield %v : i64
+  }
+  default {
+    %u = "test.big"() : () -> i64
+    scf.yield %u : i64
   }
   return %r : i64
 }
