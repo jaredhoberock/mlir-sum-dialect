@@ -78,9 +78,12 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
       return op.emitError() << "cannot lower sum type to LLVM: " << resultTy;
     Type tagTy = lowered->getBody()[0];
 
-    // A sum value carries no undefined field: the struct starts from zero, so
-    // the payload fields of the variants the value does not hold are defined.
-    Value sum = LLVM::ZeroOp::create(rewriter, loc, *lowered);
+    // A sum value defines its tag and the payload of the variant it holds, and
+    // nothing else: the struct starts as poison, so the payload field of every
+    // other variant is poison, which no read under `sum.get`'s precondition
+    // observes. The tag is inserted over that base, so it is defined in every
+    // value.
+    Value sum = LLVM::PoisonOp::create(rewriter, loc, *lowered);
     uint64_t index = op.getIndex().getZExtValue();
     Value tag = LLVM::ConstantOp::create(rewriter, loc, tagTy,
                                          rewriter.getIntegerAttr(tagTy, index));

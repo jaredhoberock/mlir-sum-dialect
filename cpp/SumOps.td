@@ -20,7 +20,10 @@ def GetOp : SumDialectOp<"get", [Pure]> {
 
     This op does not check that the sum's active tag matches the requested
     variant index. It is intended to be used only when control flow already
-    guarantees the variant (e.g. inside a matching arm).
+    guarantees the variant (e.g. inside a matching arm). Where the sum holds
+    another variant the result is poison: a sum defines only the payload of
+    the variant it holds, so a read elsewhere has no value to observe, and a
+    fold may answer it with any value.
 
     Example:
 
