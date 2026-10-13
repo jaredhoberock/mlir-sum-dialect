@@ -3,7 +3,6 @@
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
 #include "SumTypes.hpp"
-#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/PatternMatch.h>
@@ -47,10 +46,12 @@ LogicalResult GetOp::verify() {
 }
 
 /// The payload of variant k where the sum is built in view: a make of variant k
-/// gives its payload, and a rebuilt sum gives the payload its arm k makes when
-/// that payload is defined outside the arm, so it dominates the read. A make of
-/// another variant declines, since the read's precondition does not hold there
-/// and no value is the right answer.
+/// gives its payload, and a rebuilt sum (a switch or an if selecting among
+/// makes) gives the payload of its make of variant k when that payload is
+/// defined outside the make's arm, so it dominates the read. The read is
+/// meaningful only where the sum holds variant k, and there the sum carries
+/// that make's payload. A make of another variant declines, since the read's
+/// precondition does not hold there and no value is the right answer.
 OpFoldResult GetOp::fold(FoldAdaptor) {
   uint64_t index = getIndex().getZExtValue();
   if (auto make = getInput().getDefiningOp<MakeOp>()) {
@@ -58,11 +59,9 @@ OpFoldResult GetOp::fold(FoldAdaptor) {
       return make.getPayload();
     return {};
   }
-  if (std::optional<RebuiltSum> rebuilt = RebuiltSum::match(getInput())) {
-    Value payload = rebuilt->getMake(index).getPayload();
-    if (!rebuilt->getArm(index).isAncestor(payload.getParentRegion()))
+  if (std::optional<RebuiltSum> rebuilt = RebuiltSum::match(getInput()))
+    if (Value payload = rebuilt->getPayloadOutsideItsArm(index))
       return payload;
-  }
   return {};
 }
 
@@ -94,9 +93,9 @@ OpFoldResult IsVariantOp::fold(FoldAdaptor) {
 
 namespace {
 
-/// Whether a rebuilt sum holds variant k, read off its tag: the tag equals k
-/// for a variant its switch has a case for, and the last variant's default arm
-/// takes every tag from n - 1 up.
+/// Whether a rebuilt sum holds variant k, read off what selects its arm: a
+/// switch's tag compared with k, or an if's condition where its then arm makes
+/// k and the condition's negation where its else arm does (RebuiltSum).
 struct IsVariantOfRebuiltSum : OpRewritePattern<IsVariantOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -105,12 +104,8 @@ struct IsVariantOfRebuiltSum : OpRewritePattern<IsVariantOp> {
     std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
     if (!rebuilt)
       return failure();
-    uint64_t index = op.getIndex().getZExtValue();
-    bool last = index + 1 == rebuilt->getNumVariants();
-    Value variant = arith::ConstantIndexOp::create(rewriter, op.getLoc(), index);
-    rewriter.replaceOpWithNewOp<arith::CmpIOp>(
-        op, last ? arith::CmpIPredicate::uge : arith::CmpIPredicate::eq,
-        rebuilt->getTag(), variant);
+    rewriter.replaceOp(op, rebuilt->buildHolds(rewriter, op.getLoc(),
+                                               op.getIndex().getZExtValue()));
     return success();
   }
 };
@@ -396,8 +391,9 @@ OpFoldResult TagOp::fold(FoldAdaptor) {
 
 namespace {
 
-/// The tag of a rebuilt sum is its switch's tag clamped to the last variant,
-/// min(tag, n - 1), since the default arm takes every tag past the cases.
+/// The tag of a rebuilt sum is the variant its selected arm makes: a switch's
+/// tag clamped to the last variant, or an if's choice between the variants its
+/// two arms make (RebuiltSum).
 struct TagOfRebuiltSum : OpRewritePattern<TagOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -406,9 +402,7 @@ struct TagOfRebuiltSum : OpRewritePattern<TagOp> {
     std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
     if (!rebuilt)
       return failure();
-    Value last = arith::ConstantIndexOp::create(rewriter, op.getLoc(),
-                                                rebuilt->getNumVariants() - 1);
-    rewriter.replaceOpWithNewOp<arith::MinUIOp>(op, rebuilt->getTag(), last);
+    rewriter.replaceOp(op, rebuilt->buildTag(rewriter, op.getLoc()));
     return success();
   }
 };

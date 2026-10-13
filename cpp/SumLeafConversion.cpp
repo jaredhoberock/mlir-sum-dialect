@@ -85,7 +85,7 @@ bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter) {
   std::optional<RebuiltSum> rebuilt = RebuiltSum::match(select->getResult(0));
   if (!rebuilt)
     return false;
-  for (size_t variant = 0, e = rebuilt->getNumVariants(); variant != e;
+  for (size_t variant = 0, e = rebuilt->getNumArms(); variant != e;
        ++variant) {
     Region &arm = rebuilt->getArm(variant);
     if (!rebuildsFromOutside(arm, converter))

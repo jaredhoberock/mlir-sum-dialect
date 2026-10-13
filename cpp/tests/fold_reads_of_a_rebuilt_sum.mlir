@@ -7,7 +7,7 @@
 // rebuilds from its tag -- arm j yielding the make of variant j, the default
 // the last variant's -- the tag is the switch's tag clamped to the last variant,
 // is_variant compares that tag, and get reads the payload arm k makes when it is
-// defined outside the arm. A payload built inside its arm has no value outside
+// defined outside the arm, whichever of the switch's results the sum is. A payload built inside its arm has no value outside
 // the arm to answer with, so that get stays, as does every read of a switch
 // whose arms do not make their own variants.
 
@@ -97,4 +97,25 @@ func.func @reads_of_a_switch_whose_arms_make_other_variants(%tag: index, %x: i64
   %t = sum.tag %s : !I
   %a = sum.is_variant %s, 0 : !I
   return %t, %a : index, i1
+}
+
+// CHECK-LABEL: func.func @reads_of_a_rebuilt_sum_beside_other_results
+// CHECK-SAME: (%[[TAG:.*]]: index, %[[X:.*]]: i64, %[[Y:.*]]: i64)
+// CHECK: %[[OTHER:.*]] = scf.index_switch %[[TAG]] -> i64
+// CHECK: %[[HOLDS:.*]] = arith.cmpi eq, %[[TAG]]
+// CHECK-NOT: sum.
+// CHECK: return %[[OTHER]], %[[HOLDS]], %[[X]]
+func.func @reads_of_a_rebuilt_sum_beside_other_results(%tag: index, %x: i64, %y: i64) -> (i64, i1, i64) {
+  %o, %s = scf.index_switch %tag -> i64, !I
+  case 0 {
+    %m = sum.make 0 %x : !I
+    scf.yield %y, %m : i64, !I
+  }
+  default {
+    %m = sum.make 1 : !I
+    scf.yield %x, %m : i64, !I
+  }
+  %a = sum.is_variant %s, 0 : !I
+  %p = sum.get %s, 0 : !I -> i64
+  return %o, %a, %p : i64, i1, i64
 }
