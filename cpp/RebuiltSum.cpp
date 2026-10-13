@@ -1,6 +1,9 @@
 #include "RebuiltSum.hpp"
 #include "SumTypeInterface.hpp"
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/IR/IRMapping.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
+#include <mlir/Transforms/RegionUtils.h>
 
 namespace mlir::sum {
 
@@ -35,7 +38,7 @@ std::optional<RebuiltSum> RebuiltSum::match(Value value) {
     MakeOp otherwise = makeYieldedAt(choice.getElseRegion(), position);
     if (!then || !otherwise || then.getIndex() == otherwise.getIndex())
       return std::nullopt;
-    return RebuiltSum(choice, {then, otherwise});
+    return RebuiltSum(result, {then, otherwise});
   }
 
   auto select = dyn_cast<scf::IndexSwitchOp>(result.getOwner());
@@ -54,7 +57,7 @@ std::optional<RebuiltSum> RebuiltSum::match(Value value) {
       return std::nullopt;
     makes.push_back(make);
   }
-  return RebuiltSum(select, std::move(makes));
+  return RebuiltSum(result, std::move(makes));
 }
 
 Region &RebuiltSum::getArm(size_t arm) {
@@ -110,6 +113,73 @@ Value RebuiltSum::buildTag(OpBuilder &builder, Location loc) {
   auto select = cast<scf::IndexSwitchOp>(branch);
   Value last = arith::ConstantIndexOp::create(builder, loc, getNumArms() - 1);
   return arith::MinUIOp::create(builder, loc, select.getArg(), last);
+}
+
+/// The arm of `reader` that runs where the sum holds `variant`: a match's case,
+/// or the switch's case of that tag, else its default.
+static Region &readerArm(Operation *reader, uint64_t variant) {
+  if (auto match = dyn_cast<MatchOp>(reader))
+    return match.getCases()[variant];
+  auto select = cast<scf::IndexSwitchOp>(reader);
+  for (auto [value, arm] : llvm::zip(select.getCases(), select.getCaseRegions()))
+    if (value == static_cast<int64_t>(variant))
+      return arm;
+  return select.getDefaultRegion();
+}
+
+LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
+  if (reader->getBlock() != branch->getBlock() ||
+      !branch->isBeforeInBlock(reader))
+    return failure();
+  for (Operation *op = branch->getNextNode(); op != reader;
+       op = op->getNextNode())
+    if (!isMemoryEffectFree(op))
+      return failure();
+  // A value the reader reads from its own block, the sum aside, must exist
+  // where the branch stands; one from an enclosing block already does.
+  llvm::SetVector<Value> read;
+  getUsedValuesDefinedAbove(reader->getRegions(), read);
+  for (Value value : read)
+    if (Operation *definition = value.getDefiningOp())
+      if (value != sum && definition->getBlock() == branch->getBlock() &&
+          !definition->isBeforeInBlock(branch))
+        return failure();
+
+  // Each arm runs the reader's arm of its variant, and its yield carries that
+  // arm's results after its own; the operation is rebuilt with the added
+  // result types and given the arms.
+  for (size_t arm = 0, e = getNumArms(); arm != e; ++arm) {
+    Region &from = readerArm(reader, makes[arm].getIndex().getZExtValue());
+    IRMapping mapping;
+    mapping.map(Value(sum), makes[arm].getResult());
+    if (from.getNumArguments() != 0)
+      mapping.map(from.getArgument(0), makes[arm].getPayload());
+    Operation *yield = getArm(arm).front().getTerminator();
+    rewriter.setInsertionPoint(yield);
+    for (Operation &op : from.front().without_terminator())
+      rewriter.clone(op, mapping);
+    SmallVector<Value> yielded(yield->getOperands());
+    for (Value result : from.front().getTerminator()->getOperands())
+      yielded.push_back(mapping.lookupOrDefault(result));
+    rewriter.modifyOpInPlace(yield, [&] { yield->setOperands(yielded); });
+  }
+  SmallVector<Type> types(branch->getResultTypes());
+  llvm::append_range(types, reader->getResultTypes());
+  rewriter.setInsertionPoint(branch);
+  Operation *grown = nullptr;
+  if (auto choice = dyn_cast<scf::IfOp>(branch))
+    grown = scf::IfOp::create(rewriter, branch->getLoc(), types,
+                              choice.getCondition(), false, false);
+  else if (auto select = dyn_cast<scf::IndexSwitchOp>(branch))
+    grown = scf::IndexSwitchOp::create(rewriter, branch->getLoc(), types,
+                                       select.getArg(), select.getCases(),
+                                       select.getNumCases());
+  for (auto [from, to] : llvm::zip(branch->getRegions(), grown->getRegions()))
+    rewriter.inlineRegionBefore(from, to, to.end());
+  unsigned kept = branch->getNumResults();
+  rewriter.replaceOp(reader, grown->getResults().drop_front(kept));
+  rewriter.replaceOp(branch, grown->getResults().take_front(kept));
+  return success();
 }
 
 } // namespace mlir::sum

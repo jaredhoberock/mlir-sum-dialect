@@ -53,10 +53,25 @@ public:
   /// The sum's tag, an index built at `builder`'s insertion point.
   Value buildTag(OpBuilder &builder, Location loc);
 
-private:
-  RebuiltSum(Operation *branch, llvm::SmallVector<MakeOp> makes)
-      : branch(branch), makes(std::move(makes)) {}
+  /// Moves `reader` -- a `sum.match` of the sum, or the `scf.index_switch` on
+  /// its `sum.tag` that a match lowers to -- into the operation that selects
+  /// the sum: each arm, after its own operations, runs the reader's arm of the
+  /// variant it makes, with the sum read as its make and a match arm's argument
+  /// as the make's payload, and yields that arm's results beside its own; the
+  /// reader's results become the operation's added results. An arm of the
+  /// reader no arm makes the variant of is dropped, and none is copied twice,
+  /// since no two arms make one variant. The reader runs at the operation's
+  /// place instead of its own, so it must follow the operation in its block
+  /// past only operations free of memory effects and read nothing defined
+  /// between them; fails, changing nothing, otherwise.
+  LogicalResult sink(Operation *reader, RewriterBase &rewriter);
 
+private:
+  RebuiltSum(OpResult sum, llvm::SmallVector<MakeOp> makes)
+      : sum(sum), branch(sum.getOwner()), makes(std::move(makes)) {}
+
+  /// The sum, a result of `branch`.
+  OpResult sum;
   /// The scf.index_switch or scf.if the sum is a result of.
   Operation *branch;
   /// The make each arm yields, by arm.

@@ -362,6 +362,30 @@ void MatchOp::getSuccessorRegions(RegionBranchPoint point,
     successors.emplace_back(&caseRegion);
 }
 
+namespace {
+
+/// A match of a sum a branch selects among makes (RebuiltSum) moves into the
+/// branch's arms, each running the case of the variant it makes on its own
+/// make's payload, so the sum is no longer built to be taken apart.
+struct SinkMatchIntoRebuiltSum : OpRewritePattern<MatchOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MatchOp op,
+                                PatternRewriter &rewriter) const override {
+    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
+    if (!rebuilt)
+      return failure();
+    return rebuilt->sink(op, rewriter);
+  }
+};
+
+} // namespace
+
+void MatchOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                          MLIRContext *context) {
+  patterns.add<SinkMatchIntoRebuiltSum>(context);
+}
+
 void MatchOp::getRegionInvocationBounds(
     ArrayRef<Attribute> operands, SmallVectorImpl<InvocationBounds> &bounds) {
   bounds.append(getNumRegions(), InvocationBounds(/*lb=*/0, /*ub=*/1));
@@ -407,11 +431,32 @@ struct TagOfRebuiltSum : OpRewritePattern<TagOp> {
   }
 };
 
+/// The switch on a rebuilt sum's tag that a match lowers to moves into the
+/// branch's arms as the match does (SinkMatchIntoRebuiltSum). It is tried
+/// before the tag folds to a choice between variants, which would cut the
+/// switch's tie to the sum.
+struct SinkSwitchOnRebuiltTag : OpRewritePattern<TagOp> {
+  SinkSwitchOnRebuiltTag(MLIRContext *context)
+      : OpRewritePattern(context, /*benefit=*/2) {}
+
+  LogicalResult matchAndRewrite(TagOp op,
+                                PatternRewriter &rewriter) const override {
+    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
+    if (!rebuilt)
+      return failure();
+    for (Operation *user : op->getUsers())
+      if (auto select = dyn_cast<scf::IndexSwitchOp>(user))
+        if (succeeded(rebuilt->sink(select, rewriter)))
+          return success();
+    return failure();
+  }
+};
+
 } // namespace
 
 void TagOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                         MLIRContext *context) {
-  patterns.add<TagOfRebuiltSum>(context);
+  patterns.add<SinkSwitchOnRebuiltTag, TagOfRebuiltSum>(context);
 }
 
 } // end mlir::sum

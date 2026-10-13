@@ -145,6 +145,7 @@ def MatchOp : SumDialectOp<"match", [
 
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 
   let extraClassDeclaration = [{
 
