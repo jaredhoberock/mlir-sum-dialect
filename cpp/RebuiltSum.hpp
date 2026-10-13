@@ -63,7 +63,8 @@ public:
   /// no two arms make one variant, and a switch reader whose default stands for
   /// the variants of two arms is refused. The reader runs at the operation's
   /// place instead of its own, so it must follow the operation in its block
-  /// past only operations free of memory effects and read nothing defined
+  /// past only pure operations -- free of memory effects and speculatable, so
+  /// each terminates and has no undefined behavior -- and read nothing defined
   /// between them; fails, changing nothing, otherwise.
   LogicalResult sink(Operation *reader, RewriterBase &rewriter);
 

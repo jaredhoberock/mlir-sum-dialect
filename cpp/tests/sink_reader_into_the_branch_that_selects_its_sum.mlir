@@ -6,8 +6,9 @@
 // make's payload and yields that case's results beside its own, so the sum is
 // built only for the readers that remain. A case no arm makes the variant of is
 // dropped, and a reader arm two arms would run keeps the reader where it is.
-// The reader runs at the branch's place, so an operation with memory effects
-// between them keeps it where it is.
+// The reader runs at the branch's place, so an operation between them that is
+// not pure -- one with memory effects, or a loop that may not end -- keeps it
+// where it is.
 
 !O = !sum.sum<(i64, none)>
 !T = !sum.sum<(i64, none, f32)>
@@ -253,3 +254,82 @@ func.func @switch_whose_default_two_arms_reach(%tag: index, %x: i64, %y: f32) ->
   }
   return %r : i64
 }
+
+// A loop between the if and the match is free of memory effects but may never
+// end, so it is not pure: running the match's call ahead of it could make a
+// call the program never makes. The match stays after the loop.
+// CHECK-LABEL: func.func @match_after_a_loop
+// CHECK: scf.if
+// CHECK: scf.while
+// CHECK: sum.match
+// CHECK: func.call @use
+// CHECK: return
+func.func @match_after_a_loop(%c: i1, %again: i1, %x: i64) -> i64 {
+  %one = arith.constant 1 : i64
+  %s = scf.if %c -> !O {
+    %p = arith.addi %x, %one : i64
+    %m = sum.make 0 %p : !O
+    scf.yield %m : !O
+  } else {
+    %m = sum.make 1 : !O
+    scf.yield %m : !O
+  }
+  %loop = scf.while (%v = %x) : (i64) -> i64 {
+    scf.condition(%again) %v : i64
+  } do {
+  ^bb0(%v: i64):
+    %next = arith.addi %v, %one : i64
+    scf.yield %next : i64
+  }
+  sum.match %s : !O
+  case 0 (%v: i64) {
+    func.call @use(%v) : (i64) -> ()
+    sum.yield
+  }
+  case 1 {
+    func.call @use(%x) : (i64) -> ()
+    sum.yield
+  }
+  return %loop : i64
+}
+
+// The same loop before the switch on the tag that a match lowers to: the
+// switch stays after the loop.
+// CHECK-LABEL: func.func @switch_on_the_tag_after_a_loop
+// CHECK: scf.if
+// CHECK: scf.while
+// CHECK: scf.index_switch
+// CHECK: func.call @use
+// CHECK: return
+func.func @switch_on_the_tag_after_a_loop(%c: i1, %again: i1, %x: i64) -> i64 {
+  %one = arith.constant 1 : i64
+  %s = scf.if %c -> !O {
+    %p = arith.addi %x, %one : i64
+    %m = sum.make 0 %p : !O
+    scf.yield %m : !O
+  } else {
+    %m = sum.make 1 : !O
+    scf.yield %m : !O
+  }
+  %loop = scf.while (%v = %x) : (i64) -> i64 {
+    scf.condition(%again) %v : i64
+  } do {
+  ^bb0(%v: i64):
+    %next = arith.addi %v, %one : i64
+    scf.yield %next : i64
+  }
+  %t = sum.tag %s : !O
+  scf.index_switch %t
+  case 0 {
+    %v = sum.get %s, 0 : !O -> i64
+    func.call @use(%v) : (i64) -> ()
+    scf.yield
+  }
+  default {
+    func.call @use(%x) : (i64) -> ()
+    scf.yield
+  }
+  return %loop : i64
+}
+
+func.func private @use(i64)

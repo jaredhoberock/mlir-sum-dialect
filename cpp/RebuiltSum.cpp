@@ -132,9 +132,14 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
   if (reader->getBlock() != branch->getBlock() ||
       !branch->isBeforeInBlock(reader))
     return failure();
+  // The reader's effects move ahead of every operation it crosses, so each
+  // must be pure: free of memory effects, and speculatable -- it terminates
+  // and has no undefined behavior -- so running the reader first changes
+  // nothing observable. A loop that never ends is memory-effect free but not
+  // speculatable.
   for (Operation *op = branch->getNextNode(); op != reader;
        op = op->getNextNode())
-    if (!isMemoryEffectFree(op))
+    if (!isPure(op))
       return failure();
   // A value the reader reads from its own block, the sum aside, must exist
   // where the branch stands; one from an enclosing block already does.
