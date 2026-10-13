@@ -4,6 +4,7 @@
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
+#include <LeafBufferAlignment.hpp>
 #include <LeafConversion.hpp>
 #include <StridedEnvelope.hpp>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
@@ -29,8 +30,10 @@ namespace {
 /// the view's envelope (lowering::stridedEnvelope, which folds to a constant
 /// over those static values), so a dynamically sized leaf's storage is empty and
 /// a rank-0 leaf, which holds one element by its type, gets one; the view is never read, since no variant carries it, and a
-/// copy of it copies the envelope from its base. Null for a buffer whose layout
-/// is not strided.
+/// copy of it copies the envelope from its base. The storage starts at the
+/// boundary every leaf buffer starts at (lowering::kLeafBufferAlignment), so the
+/// stand-in keeps the contract of the buffer it stands for wherever that
+/// contract is stated of it. Null for a buffer whose layout is not strided.
 Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
   auto buffer = dyn_cast<MemRefType>(type);
   if (!buffer)
@@ -52,7 +55,9 @@ Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
   auto storageType =
       MemRefType::get({reach}, buffer.getElementType(),
                       MemRefLayoutAttrInterface{}, buffer.getMemorySpace());
-  Value storage = memref::AllocaOp::create(builder, loc, storageType);
+  Value storage = memref::AllocaOp::create(
+      builder, loc, storageType,
+      builder.getI64IntegerAttr(lowering::kLeafBufferAlignment));
   return memref::ReinterpretCastOp::create(builder, loc, buffer, storage,
                                            viewOffset, viewSizes, viewStrides);
 }
