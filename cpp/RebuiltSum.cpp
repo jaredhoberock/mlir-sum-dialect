@@ -2,6 +2,7 @@
 #include "SumTypeInterface.hpp"
 #include <llvm/ADT/SmallPtrSet.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
+#include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/IRMapping.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Transforms/RegionUtils.h>
@@ -162,25 +163,68 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
       return failure();
 
   // Each arm runs the reader's arm of its variant, and its yield carries that
-  // arm's results after its own; the operation is rebuilt with the added
-  // result types and given the arms.
+  // arm's results after its own.
+  ValueRange added =
+      grow(rewriter, reader->getResultTypes(), [&](size_t arm) {
+        Region &from = readerArm(reader, makes[arm].getIndex().getZExtValue());
+        IRMapping mapping;
+        mapping.map(Value(sum), makes[arm].getResult());
+        if (from.getNumArguments() != 0)
+          mapping.map(from.getArgument(0), makes[arm].getPayload());
+        for (Operation &op : from.front().without_terminator())
+          rewriter.clone(op, mapping);
+        return llvm::map_to_vector(
+            from.front().getTerminator()->getOperands(),
+            [&](Value result) { return mapping.lookupOrDefault(result); });
+      });
+  rewriter.replaceOp(reader, added);
+  return success();
+}
+
+Value RebuiltSum::yieldPayload(size_t variant, RewriterBase &rewriter) {
+  auto made = llvm::find_if(makes, [&](MakeOp make) {
+    return make.getIndex().getZExtValue() == variant;
+  });
+  if (made == makes.end() || !made->getPayload())
+    return {};
+  size_t carrier = made - makes.begin();
+  Value payload = made->getPayload();
+
+  // A result the carrier arm yields the payload at and every other arm poison
+  // already is the payload.
+  auto yieldedAt = [&](size_t arm, unsigned position) {
+    return getArm(arm).front().getTerminator()->getOperand(position);
+  };
+  for (unsigned position = 0, e = branch->getNumResults(); position != e;
+       ++position) {
+    bool carries = yieldedAt(carrier, position) == payload;
+    for (size_t arm = 0, n = getNumArms(); carries && arm != n; ++arm)
+      carries = arm == carrier ||
+                yieldedAt(arm, position).getDefiningOp<ub::PoisonOp>();
+    if (carries)
+      return branch->getResult(position);
+  }
+
+  Type type = payload.getType();
+  return grow(rewriter, type, [&](size_t arm) -> SmallVector<Value> {
+    if (arm == carrier)
+      return {payload};
+    return {ub::PoisonOp::create(rewriter, payload.getLoc(), type)};
+  }).front();
+}
+
+ValueRange
+RebuiltSum::grow(RewriterBase &rewriter, TypeRange added,
+                 llvm::function_ref<SmallVector<Value>(size_t arm)> yieldedBy) {
   for (size_t arm = 0, e = getNumArms(); arm != e; ++arm) {
-    Region &from = readerArm(reader, makes[arm].getIndex().getZExtValue());
-    IRMapping mapping;
-    mapping.map(Value(sum), makes[arm].getResult());
-    if (from.getNumArguments() != 0)
-      mapping.map(from.getArgument(0), makes[arm].getPayload());
     Operation *yield = getArm(arm).front().getTerminator();
     rewriter.setInsertionPoint(yield);
-    for (Operation &op : from.front().without_terminator())
-      rewriter.clone(op, mapping);
     SmallVector<Value> yielded(yield->getOperands());
-    for (Value result : from.front().getTerminator()->getOperands())
-      yielded.push_back(mapping.lookupOrDefault(result));
+    llvm::append_range(yielded, yieldedBy(arm));
     rewriter.modifyOpInPlace(yield, [&] { yield->setOperands(yielded); });
   }
   SmallVector<Type> types(branch->getResultTypes());
-  llvm::append_range(types, reader->getResultTypes());
+  llvm::append_range(types, added);
   rewriter.setInsertionPoint(branch);
   Operation *grown = nullptr;
   if (auto choice = dyn_cast<scf::IfOp>(branch))
@@ -193,9 +237,8 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
   for (auto [from, to] : llvm::zip(branch->getRegions(), grown->getRegions()))
     rewriter.inlineRegionBefore(from, to, to.end());
   unsigned kept = branch->getNumResults();
-  rewriter.replaceOp(reader, grown->getResults().drop_front(kept));
   rewriter.replaceOp(branch, grown->getResults().take_front(kept));
-  return success();
+  return grown->getResults().drop_front(kept);
 }
 
 } // namespace mlir::sum

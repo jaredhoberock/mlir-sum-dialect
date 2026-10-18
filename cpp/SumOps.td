@@ -39,6 +39,7 @@ def GetOp : SumDialectOp<"get", [Pure]> {
 
   let hasVerifier = 1;
   let hasFolder = 1;
+  let hasCanonicalizer = 1;
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input)) `->` type($payload)";
 
   let builders = [

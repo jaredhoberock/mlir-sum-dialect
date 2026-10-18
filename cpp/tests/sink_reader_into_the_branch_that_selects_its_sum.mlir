@@ -289,12 +289,15 @@ func.func @match_after_a_loop(%c: i1, %again: i1, %x: i64) -> i64 {
 }
 
 // The same loop before the switch on the tag that a match lowers to: the
-// switch stays after the loop.
+// switch stays after the loop. Its read of the payload is carried out of the
+// arm that builds it instead (GetOp's canonicalization), and that arm, pure,
+// then runs ahead of the loop in place of the if.
 // CHECK-LABEL: func.func @switch_on_the_tag_after_a_loop
-// CHECK: scf.if
+// CHECK-NOT: scf.if
+// CHECK: %[[P:.*]] = arith.addi
 // CHECK: scf.while
 // CHECK: scf.index_switch
-// CHECK: func.call @use
+// CHECK: func.call @use(%[[P]])
 // CHECK: return
 func.func @switch_on_the_tag_after_a_loop(%c: i1, %again: i1, %x: i64) -> i64 {
   %one = arith.constant 1 : i64

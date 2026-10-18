@@ -65,6 +65,38 @@ OpFoldResult GetOp::fold(FoldAdaptor) {
   return {};
 }
 
+namespace {
+
+/// A read of the payload of variant k of a rebuilt sum whose make of k builds
+/// its payload inside its arm becomes a result of the operation that selects
+/// the sum: that payload from the arm that makes k and poison from every other
+/// arm (RebuiltSum::yieldPayload). The fold answers a read whose payload is
+/// defined outside its arm; this carries one out of the arm that builds it, so
+/// the read no longer holds the sum, and a sum no reader holds is not built.
+struct YieldPayloadOfRebuiltSum : OpRewritePattern<GetOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(GetOp op,
+                                PatternRewriter &rewriter) const override {
+    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
+    if (!rebuilt)
+      return failure();
+    Value payload =
+        rebuilt->yieldPayload(op.getIndex().getZExtValue(), rewriter);
+    if (!payload)
+      return failure();
+    rewriter.replaceOp(op, payload);
+    return success();
+  }
+};
+
+} // namespace
+
+void GetOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                        MLIRContext *context) {
+  patterns.add<YieldPayloadOfRebuiltSum>(context);
+}
+
 //===----------------------------------------------------------------------===//
 // IsVariantOp
 //===----------------------------------------------------------------------===//

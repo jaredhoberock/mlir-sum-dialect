@@ -46,6 +46,15 @@ public:
   /// inside the arm.
   Value getPayloadOutsideItsArm(size_t variant);
 
+  /// The payload the sum carries under variant `variant`, as a result of the
+  /// operation that selects the sum: the arm that makes `variant` yields its
+  /// make's payload there, and every other arm yields poison, the value a read
+  /// of the payload has where the sum holds another variant (GetOp). A result
+  /// that already yields so is reused; otherwise the operation is rebuilt with
+  /// one more result, and this RebuiltSum no longer names it. Null, changing
+  /// nothing, when no arm makes `variant` or the variant carries no payload.
+  Value yieldPayload(size_t variant, RewriterBase &rewriter);
+
   /// An i1 that holds exactly where the sum holds variant `variant`: the if's
   /// condition itself, or one built at `builder`'s insertion point.
   Value buildHolds(OpBuilder &builder, Location loc, size_t variant);
@@ -71,6 +80,14 @@ public:
 private:
   RebuiltSum(OpResult sum, llvm::SmallVector<MakeOp> makes)
       : sum(sum), branch(sum.getOwner()), makes(std::move(makes)) {}
+
+  /// Rebuilds the operation that selects the sum with `added` results after its
+  /// own, each arm's yield carrying `yieldedBy(arm)`, built before that yield,
+  /// after its own values; returns the added results. The operation's own
+  /// results are replaced by the rebuilt one's, so this RebuiltSum no longer
+  /// names it.
+  ValueRange grow(RewriterBase &rewriter, TypeRange added,
+                  llvm::function_ref<SmallVector<Value>(size_t arm)> yieldedBy);
 
   /// The sum, a result of `branch`.
   OpResult sum;

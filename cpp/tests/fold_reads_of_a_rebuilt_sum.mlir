@@ -7,9 +7,11 @@
 // rebuilds from its tag -- arm j yielding the make of variant j, the default
 // the last variant's -- the tag is the switch's tag clamped to the last variant,
 // is_variant compares that tag, and get reads the payload arm k makes when it is
-// defined outside the arm, whichever of the switch's results the sum is. A payload built inside its arm has no value outside
-// the arm to answer with, so that get stays, as does every read of a switch
-// whose arms do not make their own variants.
+// defined outside the arm, whichever of the switch's results the sum is. A
+// payload built inside its arm is carried out of it: the switch yields it from
+// that arm and poison from every other, the value the read has where the sum
+// holds another variant. Every read of a switch whose arms do not make their
+// own variants stays.
 
 !S = !sum.sum<(i64, none, f32)>
 !I = !sum.sum<(i64, none)>
@@ -61,9 +63,16 @@ func.func @reads_of_a_rebuilt_sum(%tag: index, %x: i64, %y: f32) -> (index, i1, 
 }
 
 // CHECK-LABEL: func.func @read_of_a_payload_built_in_its_arm
-// CHECK: scf.index_switch
-// CHECK: sum.get {{.*}}, 0
-// CHECK: return
+// CHECK-SAME: (%[[TAG:.*]]: index, %[[X:.*]]: i64)
+// CHECK: %[[POISON:.*]] = ub.poison
+// CHECK: %[[P:.*]] = scf.index_switch %[[TAG]]
+// CHECK-NEXT: case 0 {
+// CHECK-NEXT: %[[INNER:.*]] = sum.make 0 %[[X]]
+// CHECK-NEXT: scf.yield %[[INNER]]
+// CHECK: default {
+// CHECK-NEXT: scf.yield %[[POISON]]
+// CHECK-NOT: sum.get
+// CHECK: return %[[P]]
 func.func @read_of_a_payload_built_in_its_arm(%tag: index, %x: i64) -> !I {
   %s = scf.index_switch %tag -> !N
   case 0 {

@@ -7,9 +7,11 @@
 // between the two variants on the condition; and get reads the payload of the
 // make of its variant when that payload is defined outside the make's arm, the
 // only value the read can observe under its precondition. Once every read
-// folds, the if is dead and goes. A payload built inside its arm has no value
-// outside the arm to answer with, so that get stays, and an if whose two arms
-// make one variant selects between two payloads, so its reads stay.
+// folds, the if is dead and goes. A payload built inside its arm is carried
+// out of it: the if yields it from that arm and poison from the other, the
+// value the read has where the sum holds the other variant; an if whose other
+// arm then yields only poison is its pure arm. An if whose two arms make one
+// variant selects between two payloads, so its reads stay.
 
 !S = !sum.sum<(i64, none, f32)>
 !I = !sum.sum<(i64, none)>
@@ -83,8 +85,9 @@ func.func @reads_of_a_sum_beside_other_results(%c: i1, %x: i64, %y: i64) -> (i64
 
 // CHECK-LABEL: func.func @read_of_a_payload_built_in_its_arm
 // CHECK-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
-// CHECK: %[[S:.*]] = scf.if %[[C]]
-// CHECK: %[[P:.*]] = sum.get %[[S]], 0
+// CHECK-NOT: scf.if
+// CHECK: %[[P:.*]] = sum.make 0 %[[X]]
+// CHECK-NOT: sum.get
 // CHECK: return %[[C]], %[[P]]
 func.func @read_of_a_payload_built_in_its_arm(%c: i1, %x: i64) -> (i1, !I) {
   %s = scf.if %c -> !N {
