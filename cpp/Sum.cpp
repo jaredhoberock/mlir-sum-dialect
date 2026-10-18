@@ -1,3 +1,4 @@
+#include "BranchArms.hpp"
 #include "ConvertToLLVM.hpp"
 #include "ConvertToSCF.hpp"
 #include "LoweringContribution.hpp"
@@ -72,6 +73,17 @@ struct LoweringContribution : lowering::LoweringContributionInterface {
   }
 };
 } // namespace
+
+/// The rewrites of a branch one of whose arms leaves its readers nothing
+/// (populateBranchArmPatterns). A read of a sum is such a branch: a match
+/// lowers to a switch on the sum's tag, a checked read of a payload aborts
+/// where the sum holds another variant, and a payload read where it holds
+/// another variant is poison (GetOp). The rewrites run wherever a
+/// canonicalization does, so the value of the live arm reaches the branch's
+/// readers as itself whichever order the reads are lowered and inlined in.
+void SumDialect::getCanonicalizationPatterns(RewritePatternSet &results) const {
+  populateBranchArmPatterns(results);
+}
 
 Operation *SumDialect::materializeConstant(OpBuilder &builder, Attribute value,
                                            Type type, Location loc) {

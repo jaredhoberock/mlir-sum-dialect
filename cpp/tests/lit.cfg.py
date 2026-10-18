@@ -19,6 +19,10 @@ def tool(name):
 def plugin(env_var, fallback):
     return os.environ.get(env_var, fallback)
 
+# Tools the RUN lines name bare (`not`) resolve the same way `tool()` does: the
+# install's bin first, then the build tree's.
+config.environment['PATH'] = os.pathsep.join([llvm_bin, fallback_llvm_bin, os.environ.get('PATH', '')])
+
 config.name = "Sum Dialect Tests"
 sum_plugin = plugin('SUM_DIALECT_PLUGIN', os.path.join(os.path.dirname(__file__), '..', 'build', 'libsum_dialect.so'))
 # The lowering driver's pass plugin registers `leaf-conversion`, so a row runs the

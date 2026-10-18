@@ -14,6 +14,10 @@ def SumDialect : Dialect {
   // reads, which materializes as an arith constant
   let hasConstantMaterializer = 1;
 
+  // the rewrites of a branch one of whose arms leaves nothing for its readers
+  // (BranchArms.hpp), over upstream's scf and cf operations
+  let hasCanonicalizer = 1;
+
   let extraClassDeclaration = [{
     void registerTypes();
   }];

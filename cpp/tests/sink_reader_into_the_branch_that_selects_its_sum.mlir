@@ -15,18 +15,16 @@
 
 // The index of a checked read: Some of a value the arm computes, None
 // otherwise; the None case of its unwrap traps. The if yields the read and the
-// trap moves into its else arm.
+// trap moves into its else arm, after which the if, one of whose arms aborts,
+// is the assertion of its condition followed by its live arm (the dialect's
+// branch rewrites, BranchArms.hpp).
 // CHECK-LABEL: func.func @match_of_some_or_none
 // CHECK-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
-// CHECK: %[[R:.*]] = scf.if %[[C]] -> (i64) {
-// CHECK:   %[[P:.*]] = arith.muli %[[X]], %[[X]]
-// CHECK:   scf.yield %[[P]]
-// CHECK: } else {
-// CHECK:   cf.assert %false, "unwrap on None"
-// CHECK:   scf.yield %{{.*}} : i64
-// CHECK: }
+// CHECK-NOT: scf.if
+// CHECK: cf.assert %[[C]], "unwrap on None"
+// CHECK-NEXT: %[[P:.*]] = arith.muli %[[X]], %[[X]]
 // CHECK-NOT: sum.
-// CHECK: return %[[R]]
+// CHECK: return %[[P]]
 func.func @match_of_some_or_none(%c: i1, %x: i64) -> i64 {
   %s = scf.if %c -> !O {
     %p = arith.muli %x, %x : i64
@@ -52,14 +50,11 @@ func.func @match_of_some_or_none(%c: i1, %x: i64) -> i64 {
 // The shape a match lowers to before the canonicalizer meets it.
 // CHECK-LABEL: func.func @switch_on_the_tag_of_some_or_none
 // CHECK-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
-// CHECK: %[[R:.*]] = scf.if %[[C]] -> (i64) {
-// CHECK:   %[[P:.*]] = arith.muli %[[X]], %[[X]]
-// CHECK:   scf.yield %[[P]]
-// CHECK: } else {
-// CHECK:   cf.assert %false, "unwrap on None"
-// CHECK: }
+// CHECK-NOT: scf.if
+// CHECK: cf.assert %[[C]], "unwrap on None"
+// CHECK-NEXT: %[[P:.*]] = arith.muli %[[X]], %[[X]]
 // CHECK-NOT: sum.
-// CHECK: return %[[R]]
+// CHECK: return %[[P]]
 func.func @switch_on_the_tag_of_some_or_none(%c: i1, %x: i64) -> i64 {
   %s = scf.if %c -> !O {
     %p = arith.muli %x, %x : i64
