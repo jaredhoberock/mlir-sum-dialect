@@ -2,7 +2,6 @@
 #include "SumTypeInterface.hpp"
 #include <llvm/ADT/SmallPtrSet.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
-#include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/IRMapping.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Transforms/RegionUtils.h>
@@ -33,6 +32,8 @@ std::optional<RebuiltSum> RebuiltSum::match(Value value) {
   auto type = dyn_cast<SumTypeInterface>(value.getType());
   if (!result || !type)
     return std::nullopt;
+  if (isa<AssembleOp>(result.getOwner()))
+    return RebuiltSum(result, {});
   unsigned position = result.getResultNumber();
 
   if (auto choice = dyn_cast<scf::IfOp>(result.getOwner())) {
@@ -63,12 +64,14 @@ std::optional<RebuiltSum> RebuiltSum::match(Value value) {
 }
 
 Region &RebuiltSum::getArm(size_t arm) {
-  if (auto choice = dyn_cast<scf::IfOp>(branch))
+  if (auto choice = dyn_cast<scf::IfOp>(owner))
     return arm == 0 ? choice.getThenRegion() : choice.getElseRegion();
-  return switchArm(cast<scf::IndexSwitchOp>(branch), arm, getNumArms());
+  return switchArm(cast<scf::IndexSwitchOp>(owner), arm, getNumArms());
 }
 
-Value RebuiltSum::getPayloadOutsideItsArm(size_t variant) {
+Value RebuiltSum::getDominatingPayload(size_t variant) {
+  if (auto assembled = dyn_cast<AssembleOp>(owner))
+    return assembled.getPayloadOf(variant);
   for (size_t arm = 0, e = getNumArms(); arm != e; ++arm) {
     if (makes[arm].getIndex().getZExtValue() != variant)
       continue;
@@ -82,7 +85,12 @@ Value RebuiltSum::getPayloadOutsideItsArm(size_t variant) {
 
 Value RebuiltSum::buildHolds(OpBuilder &builder, Location loc,
                              size_t variant) {
-  if (auto choice = dyn_cast<scf::IfOp>(branch)) {
+  if (auto assembled = dyn_cast<AssembleOp>(owner)) {
+    Value expected = arith::ConstantIndexOp::create(builder, loc, variant);
+    return arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                 assembled.getTag(), expected);
+  }
+  if (auto choice = dyn_cast<scf::IfOp>(owner)) {
     Value condition = choice.getCondition();
     if (makes[0].getIndex().getZExtValue() == variant)
       return condition;
@@ -93,7 +101,7 @@ Value RebuiltSum::buildHolds(OpBuilder &builder, Location loc,
     return arith::ConstantIntOp::create(builder, loc, 0, 1);
   }
   // The default arm takes every tag from n - 1 up.
-  auto select = cast<scf::IndexSwitchOp>(branch);
+  auto select = cast<scf::IndexSwitchOp>(owner);
   bool last = variant + 1 == getNumArms();
   Value expected = arith::ConstantIndexOp::create(builder, loc, variant);
   return arith::CmpIOp::create(
@@ -102,7 +110,9 @@ Value RebuiltSum::buildHolds(OpBuilder &builder, Location loc,
 }
 
 Value RebuiltSum::buildTag(OpBuilder &builder, Location loc) {
-  if (auto choice = dyn_cast<scf::IfOp>(branch)) {
+  if (auto assembled = dyn_cast<AssembleOp>(owner))
+    return assembled.getTag();
+  if (auto choice = dyn_cast<scf::IfOp>(owner)) {
     Value then = arith::ConstantIndexOp::create(
         builder, loc, makes[0].getIndex().getZExtValue());
     Value otherwise = arith::ConstantIndexOp::create(
@@ -112,7 +122,7 @@ Value RebuiltSum::buildTag(OpBuilder &builder, Location loc) {
   }
   // The default arm takes every tag past the cases, so the tag clamps to the
   // last variant.
-  auto select = cast<scf::IndexSwitchOp>(branch);
+  auto select = cast<scf::IndexSwitchOp>(owner);
   Value last = arith::ConstantIndexOp::create(builder, loc, getNumArms() - 1);
   return arith::MinUIOp::create(builder, loc, select.getArg(), last);
 }
@@ -130,15 +140,15 @@ static Region &readerArm(Operation *reader, uint64_t variant) {
 }
 
 LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
-  if (reader->getBlock() != branch->getBlock() ||
-      !branch->isBeforeInBlock(reader))
+  if (isa<AssembleOp>(owner) || reader->getBlock() != owner->getBlock() ||
+      !owner->isBeforeInBlock(reader))
     return failure();
   // The reader's effects move ahead of every operation it crosses, so each
   // must be pure: free of memory effects, and speculatable -- it terminates
   // and has no undefined behavior -- so running the reader first changes
   // nothing observable. A loop that never ends is memory-effect free but not
   // speculatable.
-  for (Operation *op = branch->getNextNode(); op != reader;
+  for (Operation *op = owner->getNextNode(); op != reader;
        op = op->getNextNode())
     if (!isPure(op))
       return failure();
@@ -148,8 +158,8 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
   getUsedValuesDefinedAbove(reader->getRegions(), read);
   for (Value value : read)
     if (Operation *definition = value.getDefiningOp())
-      if (value != sum && definition->getBlock() == branch->getBlock() &&
-          !definition->isBeforeInBlock(branch))
+      if (value != sum && definition->getBlock() == owner->getBlock() &&
+          !definition->isBeforeInBlock(owner))
         return failure();
 
   // Each reader arm is copied into at most one arm. A switch's default can
@@ -181,38 +191,6 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
   return success();
 }
 
-Value RebuiltSum::yieldPayload(size_t variant, RewriterBase &rewriter) {
-  auto made = llvm::find_if(makes, [&](MakeOp make) {
-    return make.getIndex().getZExtValue() == variant;
-  });
-  if (made == makes.end() || !made->getPayload())
-    return {};
-  size_t carrier = made - makes.begin();
-  Value payload = made->getPayload();
-
-  // A result the carrier arm yields the payload at and every other arm poison
-  // already is the payload.
-  auto yieldedAt = [&](size_t arm, unsigned position) {
-    return getArm(arm).front().getTerminator()->getOperand(position);
-  };
-  for (unsigned position = 0, e = branch->getNumResults(); position != e;
-       ++position) {
-    bool carries = yieldedAt(carrier, position) == payload;
-    for (size_t arm = 0, n = getNumArms(); carries && arm != n; ++arm)
-      carries = arm == carrier ||
-                yieldedAt(arm, position).getDefiningOp<ub::PoisonOp>();
-    if (carries)
-      return branch->getResult(position);
-  }
-
-  Type type = payload.getType();
-  return grow(rewriter, type, [&](size_t arm) -> SmallVector<Value> {
-    if (arm == carrier)
-      return {payload};
-    return {ub::PoisonOp::create(rewriter, payload.getLoc(), type)};
-  }).front();
-}
-
 ValueRange
 RebuiltSum::grow(RewriterBase &rewriter, TypeRange added,
                  llvm::function_ref<SmallVector<Value>(size_t arm)> yieldedBy) {
@@ -223,21 +201,21 @@ RebuiltSum::grow(RewriterBase &rewriter, TypeRange added,
     llvm::append_range(yielded, yieldedBy(arm));
     rewriter.modifyOpInPlace(yield, [&] { yield->setOperands(yielded); });
   }
-  SmallVector<Type> types(branch->getResultTypes());
+  SmallVector<Type> types(owner->getResultTypes());
   llvm::append_range(types, added);
-  rewriter.setInsertionPoint(branch);
+  rewriter.setInsertionPoint(owner);
   Operation *grown = nullptr;
-  if (auto choice = dyn_cast<scf::IfOp>(branch))
-    grown = scf::IfOp::create(rewriter, branch->getLoc(), types,
+  if (auto choice = dyn_cast<scf::IfOp>(owner))
+    grown = scf::IfOp::create(rewriter, owner->getLoc(), types,
                               choice.getCondition(), false, false);
-  else if (auto select = dyn_cast<scf::IndexSwitchOp>(branch))
-    grown = scf::IndexSwitchOp::create(rewriter, branch->getLoc(), types,
+  else if (auto select = dyn_cast<scf::IndexSwitchOp>(owner))
+    grown = scf::IndexSwitchOp::create(rewriter, owner->getLoc(), types,
                                        select.getArg(), select.getCases(),
                                        select.getNumCases());
-  for (auto [from, to] : llvm::zip(branch->getRegions(), grown->getRegions()))
+  for (auto [from, to] : llvm::zip(owner->getRegions(), grown->getRegions()))
     rewriter.inlineRegionBefore(from, to, to.end());
-  unsigned kept = branch->getNumResults();
-  rewriter.replaceOp(branch, grown->getResults().take_front(kept));
+  unsigned kept = owner->getNumResults();
+  rewriter.replaceOp(owner, grown->getResults().take_front(kept));
   return grown->getResults().drop_front(kept);
 }
 

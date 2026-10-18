@@ -1,12 +1,15 @@
 // RUN: mlir-opt --pass-pipeline="builtin.module(canonicalize,inline,canonicalize)" %s | FileCheck %s
+// RUN: mlir-opt --pass-pipeline="builtin.module(inline,canonicalize)" %s | FileCheck %s
 
 // A callee builds an Option of a view in one arm of a branch, and its caller
 // unwraps it with a switch on the tag whose default aborts. Canonicalized
-// before the call is inlined, the switch is the assertion that the tag is
-// Some's, followed by the read of the payload; after inlining, that read is
-// carried out of the arm that builds the view and the arm left yields only
-// poison, so the view the callee builds is the caller's value as itself, with
-// its static extent, whichever order the rewrites meet it in.
+// before the call is inlined, the switch is the assertion that the Option is
+// Some, followed by the read of the payload; after inlining, that assertion is
+// of the branch's own condition, which refutes the branch's None arm, so the
+// assertion moves ahead of the Some arm and the read folds to the view the arm
+// builds. The view is the caller's value as itself, with its static extent,
+// built after the assertion that guards it, whichever order the rewrites meet
+// it in.
 
 !View = memref<?x?xf32, strided<[?, 1], offset: ?>>
 !Opt = !sum.sum<(!View, none)>
@@ -15,9 +18,9 @@
 // CHECK-SAME: (%[[OK:.*]]: i1, %[[M:.*]]: memref<?xf32>, %[[N:.*]]: index)
 // CHECK-NOT: scf.if
 // CHECK-NOT: sum.
-// CHECK: %[[VIEW:.*]] = memref.reinterpret_cast %[[M]] {{.*}} to memref<?x8xf32, strided<[8, 1]>>
+// CHECK: cf.assert %[[OK]], "unwrap on None"
+// CHECK-NEXT: %[[VIEW:.*]] = memref.reinterpret_cast %[[M]] {{.*}} to memref<?x8xf32, strided<[8, 1]>>
 // CHECK-NEXT: %[[CAST:.*]] = memref.cast %[[VIEW]]
-// CHECK: cf.assert %{{.*}}, "unwrap on None"
 // CHECK-NEXT: return %[[CAST]]
 func.func private @packed(%ok: i1, %m: memref<?xf32>, %n: index) -> !Opt {
   %r = scf.if %ok -> !Opt {

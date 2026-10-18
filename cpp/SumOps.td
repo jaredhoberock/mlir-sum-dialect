@@ -39,7 +39,6 @@ def GetOp : SumDialectOp<"get", [Pure]> {
 
   let hasVerifier = 1;
   let hasFolder = 1;
-  let hasCanonicalizer = 1;
   let assemblyFormat = "$input `,` $index attr-dict `:` qualified(type($input)) `->` type($payload)";
 
   let builders = [
@@ -49,6 +48,42 @@ def GetOp : SumDialectOp<"get", [Pure]> {
       build($_builder, $_state, resultType, input, $_builder.getIndexAttr(index));
     }]>
   ];
+}
+
+def AssembleOp : SumDialectOp<"assemble", [Pure]> {
+  let summary = "Construct a sum from its tag and the payload of every variant";
+  let description = [{
+    Creates a value of a sum type from its parts: `tag`, the index of the
+    variant the sum holds, and one payload operand per variant that carries a
+    payload, in variant order. The sum holds the variant `tag` names, with that
+    variant's payload operand as its payload; the payload operands of the other
+    variants are not part of the value, so any value of their type, poison
+    included, may stand there. A tag that names no variant makes the sum poison.
+    `sum.make k %p` is the assemble whose tag is the constant k.
+
+    Every read of an assembled sum is a projection by position: `sum.tag` is
+    `tag`, `sum.is_variant` of variant k compares `tag` with k, and `sum.get` of
+    variant k is the payload operand of variant k.
+
+    Example:
+
+        %s = sum.assemble %tag (%x, %y : i64, f32) : !sum.sum<(i64, none, f32)>
+        %n = sum.assemble %tag : !sum.sum<(none, none)>
+  }];
+
+  let arguments = (ins Index:$tag, Variadic<AnyType>:$payloads);
+  let results = (outs IsSumTypeInterface:$result);
+
+  let hasVerifier = 1;
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
+  let assemblyFormat = "$tag (` ` `(` $payloads^ `:` type($payloads) `)`)? attr-dict `:` qualified(type($result))";
+
+  let extraClassDeclaration = [{
+    /// The payload operand of variant `variant`, or null for a variant that
+    /// carries no payload.
+    Value getPayloadOf(size_t variant);
+  }];
 }
 
 def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {

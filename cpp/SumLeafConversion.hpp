@@ -2,31 +2,22 @@
 
 namespace mlir {
 
-class ConversionTarget;
-class RewritePatternSet;
 class TypeConverter;
 
 namespace sum {
 
 /// Adds the sum type to the leaf conversion `converter`: a sum converts to an
 /// `index` holding its tag followed by the leaves of every variant that carries
-/// a payload, in variant order. Its source materialization switches on the tag
-/// (`scf.index_switch`), and the arm of the variant the tag names rebuilds that
-/// variant's payload from its leaves and makes the sum of it. Its target
-/// materialization reads the tag with `sum.tag` and each payload with `sum.get`
-/// only where `sum.is_variant` holds; where it does not, a payload's leaves are
-/// absent: an automatic allocation with the leaf's type for a buffer, holding no
-/// element unless the type fixes some, and `ub.poison` for anything else. In both
-/// directions a payload is read only where the value carries it. Payloads convert
-/// and materialize through `converter`, whatever dialect owns them.
+/// a payload, in variant order. Its source materialization rebuilds the sum as
+/// one `sum.assemble` of the tag and every variant's payload, each rebuilt from
+/// its leaves, so every read of the rebuilt sum folds to a leaf. Its target
+/// materialization reads the tag with `sum.tag`, and each payload leaf as the
+/// select, on `sum.is_variant`, of the leaf of the payload `sum.get` reads and
+/// a stand-in for an absent leaf: an automatic allocation with the leaf's type
+/// for a buffer, holding no element unless the type fixes some, and `ub.poison`
+/// for anything else. Neither branches. Payloads convert and materialize
+/// through `converter`, whatever dialect owns them.
 void populateSumLeafTypes(TypeConverter &converter);
-
-/// Marks legal under `target` the switch the source materialization above
-/// builds and the yields of its arms, judged under the leaf conversion
-/// `converter`, so the leaf conversion does not flatten its own rebuild again.
-void populateSumLeafLegality(ConversionTarget &target,
-                             const TypeConverter &converter,
-                             RewritePatternSet &patterns);
 
 } // namespace sum
 } // namespace mlir

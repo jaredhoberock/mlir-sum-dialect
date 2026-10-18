@@ -3,8 +3,10 @@
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
 #include "SumTypes.hpp"
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinTypes.h>
+#include <mlir/IR/Matchers.h>
 #include <mlir/IR/PatternMatch.h>
 
 #define GET_OP_CLASSES
@@ -46,12 +48,12 @@ LogicalResult GetOp::verify() {
 }
 
 /// The payload of variant k where the sum is built in view: a make of variant k
-/// gives its payload, and a rebuilt sum (a switch or an if selecting among
-/// makes) gives the payload of its make of variant k when that payload is
-/// defined outside the make's arm, so it dominates the read. The read is
-/// meaningful only where the sum holds variant k, and there the sum carries
-/// that make's payload. A make of another variant declines, since the read's
-/// precondition does not hold there and no value is the right answer.
+/// gives its payload, and a rebuilt sum (an assemble, or a switch or an if
+/// selecting among makes) gives the payload of variant k that dominates the
+/// read (RebuiltSum::getDominatingPayload). The read is meaningful only where
+/// the sum holds variant k, and there the sum carries that payload; elsewhere
+/// the read is poison, which any value refines. A make of another variant
+/// declines, since it carries no payload of variant k to answer with.
 OpFoldResult GetOp::fold(FoldAdaptor) {
   uint64_t index = getIndex().getZExtValue();
   if (auto make = getInput().getDefiningOp<MakeOp>()) {
@@ -60,41 +62,9 @@ OpFoldResult GetOp::fold(FoldAdaptor) {
     return {};
   }
   if (std::optional<RebuiltSum> rebuilt = RebuiltSum::match(getInput()))
-    if (Value payload = rebuilt->getPayloadOutsideItsArm(index))
+    if (Value payload = rebuilt->getDominatingPayload(index))
       return payload;
   return {};
-}
-
-namespace {
-
-/// A read of the payload of variant k of a rebuilt sum whose make of k builds
-/// its payload inside its arm becomes a result of the operation that selects
-/// the sum: that payload from the arm that makes k and poison from every other
-/// arm (RebuiltSum::yieldPayload). The fold answers a read whose payload is
-/// defined outside its arm; this carries one out of the arm that builds it, so
-/// the read no longer holds the sum, and a sum no reader holds is not built.
-struct YieldPayloadOfRebuiltSum : OpRewritePattern<GetOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(GetOp op,
-                                PatternRewriter &rewriter) const override {
-    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
-    if (!rebuilt)
-      return failure();
-    Value payload =
-        rebuilt->yieldPayload(op.getIndex().getZExtValue(), rewriter);
-    if (!payload)
-      return failure();
-    rewriter.replaceOp(op, payload);
-    return success();
-  }
-};
-
-} // namespace
-
-void GetOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
-                                        MLIRContext *context) {
-  patterns.add<YieldPayloadOfRebuiltSum>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -125,9 +95,10 @@ OpFoldResult IsVariantOp::fold(FoldAdaptor) {
 
 namespace {
 
-/// Whether a rebuilt sum holds variant k, read off what selects its arm: a
-/// switch's tag compared with k, or an if's condition where its then arm makes
-/// k and the condition's negation where its else arm does (RebuiltSum).
+/// Whether a rebuilt sum holds variant k, read off what names its variant: an
+/// assemble's or a switch's tag compared with k, or an if's condition where its
+/// then arm makes k and the condition's negation where its else arm does
+/// (RebuiltSum).
 struct IsVariantOfRebuiltSum : OpRewritePattern<IsVariantOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -447,9 +418,9 @@ OpFoldResult TagOp::fold(FoldAdaptor) {
 
 namespace {
 
-/// The tag of a rebuilt sum is the variant its selected arm makes: a switch's
-/// tag clamped to the last variant, or an if's choice between the variants its
-/// two arms make (RebuiltSum).
+/// The tag of a rebuilt sum is the variant it holds: an assemble's tag, a
+/// switch's tag clamped to the last variant, or an if's choice between the
+/// variants its two arms make (RebuiltSum).
 struct TagOfRebuiltSum : OpRewritePattern<TagOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -484,11 +455,141 @@ struct SinkSwitchOnRebuiltTag : OpRewritePattern<TagOp> {
   }
 };
 
+/// A comparison of a sum's tag for equality with a constant k is the question
+/// whether the sum holds variant k, which `sum.is_variant` asks of the sum
+/// itself: each `arith.cmpi eq` of the tag with k becomes `is_variant k`, and
+/// each `ne` its negation, so the question folds through whatever builds the
+/// sum (IsVariantOfRebuiltSum) and an assertion of it states the condition of
+/// the branch that selects the sum. It is tried before the tag of a rebuilt sum
+/// becomes a choice between variants (TagOfRebuiltSum), which no fold ties back
+/// to that condition. A constant that names no variant is left to arith.
+struct CompareOfTag : OpRewritePattern<TagOp> {
+  CompareOfTag(MLIRContext *context)
+      : OpRewritePattern(context, /*benefit=*/2) {}
+
+  LogicalResult matchAndRewrite(TagOp op,
+                                PatternRewriter &rewriter) const override {
+    Value tag = op.getResult();
+    size_t variants =
+        cast<SumTypeInterface>(op.getInput().getType()).getNumVariants();
+    bool rewrote = false;
+    for (Operation *user : llvm::make_early_inc_range(op->getUsers())) {
+      auto compare = dyn_cast<arith::CmpIOp>(user);
+      if (!compare || (compare.getPredicate() != arith::CmpIPredicate::eq &&
+                       compare.getPredicate() != arith::CmpIPredicate::ne))
+        continue;
+      Value other =
+          compare.getLhs() == tag ? compare.getRhs() : compare.getLhs();
+      APInt variant;
+      if (!matchPattern(other, m_ConstantInt(&variant)) ||
+          variant.uge(variants))
+        continue;
+      rewriter.setInsertionPoint(compare);
+      Location loc = compare.getLoc();
+      Value holds = IsVariantOp::create(rewriter, loc, op.getInput(),
+                                        variant.getZExtValue());
+      if (compare.getPredicate() == arith::CmpIPredicate::ne) {
+        Value isTrue = arith::ConstantIntOp::create(rewriter, loc, 1, 1);
+        holds = arith::XOrIOp::create(rewriter, loc, holds, isTrue);
+      }
+      rewriter.replaceOp(compare, holds);
+      rewrote = true;
+    }
+    return success(rewrote);
+  }
+};
+
 } // namespace
 
 void TagOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                         MLIRContext *context) {
-  patterns.add<SinkSwitchOnRebuiltTag, TagOfRebuiltSum>(context);
+  patterns.add<SinkSwitchOnRebuiltTag, CompareOfTag, TagOfRebuiltSum>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// AssembleOp
+//===----------------------------------------------------------------------===//
+
+Value AssembleOp::getPayloadOf(size_t variant) {
+  auto type = cast<SumTypeInterface>(getResult().getType());
+  if (type.getPayloadTypes(variant).empty())
+    return {};
+  size_t position = 0;
+  for (size_t earlier = 0; earlier != variant; ++earlier)
+    if (!type.getPayloadTypes(earlier).empty())
+      ++position;
+  return getPayloads()[position];
+}
+
+LogicalResult AssembleOp::verify() {
+  auto type = cast<SumTypeInterface>(getResult().getType());
+  if (type.getNumVariants() == 0)
+    return emitOpError("cannot assemble a sum type with zero variants");
+  SmallVector<Type> expected;
+  for (size_t variant = 0, e = type.getNumVariants(); variant != e; ++variant)
+    llvm::append_range(expected, type.getPayloadTypes(variant));
+  if (TypeRange(getPayloads()) != TypeRange(expected))
+    return emitOpError("expects one payload per variant that carries one, of "
+                       "that variant's payload type, in variant order");
+  return success();
+}
+
+/// An assemble of a sum's own tag and its own payloads is that sum: under the
+/// variant the sum holds, each payload operand is the sum's own payload -- its
+/// `sum.get`, or the select of that read where the sum holds the variant, the
+/// form the leaf conversion takes a payload apart in -- and the other
+/// variants' payloads are not part of the value.
+OpFoldResult AssembleOp::fold(FoldAdaptor) {
+  auto tag = getTag().getDefiningOp<TagOp>();
+  if (!tag || tag.getInput().getType() != getResult().getType())
+    return {};
+  Value sum = tag.getInput();
+  auto type = cast<SumTypeInterface>(sum.getType());
+  for (size_t variant = 0, e = type.getNumVariants(); variant != e; ++variant) {
+    Value payload = getPayloadOf(variant);
+    if (!payload)
+      continue;
+    if (auto select = payload.getDefiningOp<arith::SelectOp>()) {
+      auto holds = select.getCondition().getDefiningOp<IsVariantOp>();
+      if (!holds || holds.getInput() != sum ||
+          holds.getIndex().getZExtValue() != variant)
+        return {};
+      payload = select.getTrueValue();
+    }
+    auto read = payload.getDefiningOp<GetOp>();
+    if (!read || read.getInput() != sum ||
+        read.getIndex().getZExtValue() != variant)
+      return {};
+  }
+  return sum;
+}
+
+namespace {
+
+/// An assemble whose tag is the constant k is the make of variant k from its
+/// payload operand of k.
+struct AssembleOfConstantTag : OpRewritePattern<AssembleOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AssembleOp op,
+                                PatternRewriter &rewriter) const override {
+    APInt variant;
+    auto type = cast<SumTypeInterface>(op.getResult().getType());
+    if (!matchPattern(op.getTag(), m_ConstantInt(&variant)) ||
+        variant.uge(type.getNumVariants()))
+      return rewriter.notifyMatchFailure(op, "the tag names no known variant");
+    size_t index = variant.getZExtValue();
+    rewriter.replaceOpWithNewOp<MakeOp>(op, type, rewriter.getIndexAttr(index),
+                                        op.getPayloadOf(index));
+    return success();
+  }
+};
+
+} // namespace
+
+void AssembleOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                             MLIRContext *context) {
+  patterns.add<AssembleOfConstantTag>(context);
 }
 
 } // end mlir::sum

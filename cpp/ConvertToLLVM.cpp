@@ -1,6 +1,7 @@
 #include "ConvertToLLVM.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
+#include "SumTypeInterface.hpp"
 #include <mlir/Conversion/LLVMCommon/TypeConverter.h>
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
@@ -99,6 +100,51 @@ struct MakeOpLowering : OpConversionPattern<MakeOp> {
   }
 };
 
+/// An assemble is the make of every variant at once: over a poison struct, the
+/// tag narrowed to the tag field's width, and each payload operand in the field
+/// of its variant. The fields of the variants the tag does not name hold values
+/// no read under `sum.get`'s precondition observes, as a make's poison fields
+/// do.
+struct AssembleOpLowering : OpConversionPattern<AssembleOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(AssembleOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultTy = cast<SumTypeInterface>(op.getResult().getType());
+
+    auto lowered = getLoweredSum(resultTy, *getTypeConverter());
+    if (failed(lowered))
+      return op.emitError() << "cannot lower sum type to LLVM: " << resultTy;
+    Type tagTy = lowered->getBody()[0];
+
+    // The tag holds a variant ordinal, which is never negative, so it narrows
+    // or widens as an unsigned value (TagOpLowering reads it back so).
+    Value tag = adaptor.getTag();
+    unsigned from = tag.getType().getIntOrFloatBitWidth();
+    unsigned to = tagTy.getIntOrFloatBitWidth();
+    if (from > to)
+      tag = LLVM::TruncOp::create(rewriter, loc, tagTy, tag);
+    else if (from < to)
+      tag = LLVM::ZExtOp::create(rewriter, loc, tagTy, tag);
+    Value sum = LLVM::PoisonOp::create(rewriter, loc, *lowered);
+    sum = LLVM::InsertValueOp::create(rewriter, loc, sum, tag,
+                                      ArrayRef<int64_t>{0});
+    ValueRange payloads = adaptor.getPayloads();
+    for (size_t variant = 0, e = resultTy.getNumVariants(); variant != e;
+         ++variant) {
+      if (resultTy.getPayloadTypes(variant).empty())
+        continue;
+      sum = LLVM::InsertValueOp::create(rewriter, loc, sum, payloads.front(),
+                                        variant + 1);
+      payloads = payloads.drop_front();
+    }
+    rewriter.replaceOp(op, sum);
+    return success();
+  }
+};
+
 struct TagOpLowering : OpConversionPattern<TagOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -164,6 +210,7 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
   });
 
   patterns.add<
+    AssembleOpLowering,
     GetOpLowering,
     IsVariantOpLowering,
     MakeOpLowering,

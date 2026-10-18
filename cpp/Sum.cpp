@@ -38,12 +38,6 @@ struct LeafConversionInterface : public lowering::LeafConversionInterface {
   void populateLeafTypes(TypeConverter &converter) const override final {
     populateSumLeafTypes(converter);
   }
-
-  void populateLeafLegality(ConversionTarget &target,
-                            const TypeConverter &converter,
-                            RewritePatternSet &patterns) const override final {
-    populateSumLeafLegality(target, converter, patterns);
-  }
 };
 
 namespace {
@@ -74,11 +68,11 @@ struct LoweringContribution : lowering::LoweringContributionInterface {
 };
 } // namespace
 
-/// The rewrites of a branch one of whose arms leaves its readers nothing
-/// (populateBranchArmPatterns). A read of a sum is such a branch: a match
-/// lowers to a switch on the sum's tag, a checked read of a payload aborts
-/// where the sum holds another variant, and a payload read where it holds
-/// another variant is poison (GetOp). The rewrites run wherever a
+/// The rewrites of a branch one of whose arms cannot complete
+/// (populateBranchArmPatterns). A checked read of a sum is such a branch: a
+/// match lowers to a switch on the sum's tag, and an unwrap's arm for every
+/// other variant aborts, or the assertion after a branch that builds the sum
+/// refutes the arm that builds another variant. The rewrites run wherever a
 /// canonicalization does, so the value of the live arm reaches the branch's
 /// readers as itself whichever order the reads are lowered and inlined in.
 void SumDialect::getCanonicalizationPatterns(RewritePatternSet &results) const {

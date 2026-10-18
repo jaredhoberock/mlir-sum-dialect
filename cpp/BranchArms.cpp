@@ -1,26 +1,33 @@
-// A branch with an arm that leaves its readers nothing, written as what it is.
+// A branch with an arm that cannot complete, written as what it is.
 //
-// An arm that asserts a constant false cannot complete: the program ends at the
-// assertion, and the values the arm yields after it are never read. A branch one
-// of whose arms aborts so is therefore the assertion of the condition under
-// which it takes its other arm, followed by that arm: on every input the two
-// programs abort at the same assertion with the same message, and otherwise run
-// the same operations and compute the same values.
+// Every rewrite here keeps one law: the branch becomes an assertion of the
+// condition under which it takes its live arm, followed by that arm, and
+// nothing else moves. Where the assertion holds, the program runs the same
+// operations in the same order and computes the same values. Where it fails,
+// the program ends at the assertion with the message it ended with before,
+// having skipped only operations free of memory effects, whose running is not
+// observed once the program ends. The live arm runs after the assertion of its
+// own condition, where it ran before, so no operation of it runs on a path its
+// guard excluded, and nothing is asked of the arm's operations. Whether an
+// operation may be skipped or crossed is asked only of the operations the
+// moved assertion goes ahead of on the path where it fails.
 //
-// An arm that yields only poison and does nothing else gives its readers no
-// value: poison is refined by any value, so the branch's results may be the
-// other arm's wherever the branch takes either arm. When that other arm is pure
-// it may run where the branch would not take it, and the branch is that arm.
+// An arm cannot complete in two ways. It aborts: it asserts a constant false
+// after operations free of memory effects. Or the continuation refutes it: the
+// operations after the branch, past pure ones, assert the condition under which
+// the branch takes another arm, so every run that takes this arm ends at that
+// assertion, and when the arm is free of memory effects nothing it or those
+// operations did is observed before it ends.
 //
 // Written so, the branch joins nothing, and a value its live arm computes
 // reaches the readers of the branch's result as itself, its producer and its
 // type in view, where as the branch's result it is the join of that value with
 // the other arm's, which no fold sees through.
 #include "BranchArms.hpp"
+#include "SumOps.hpp"
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
-#include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/IR/Matchers.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/Interfaces/SideEffectInterfaces.h>
@@ -48,27 +55,61 @@ cf::AssertOp abortingAssertion(Region &region) {
   return {};
 }
 
-/// Whether every operation of the arm `region` before its terminator is pure:
-/// free of memory effects and speculatable, so it terminates and has no
-/// undefined behavior. Running such an arm where the branch would not take it,
-/// or not running it where the branch would, changes nothing observable. False
-/// for an absent arm.
-bool isPureArm(Region &region) {
-  if (region.empty())
-    return false;
-  return llvm::all_of(region.front().without_terminator(),
-                      [](Operation &op) { return isPure(&op); });
+/// The first assertion after `branch` in its block, every operation between
+/// them pure -- free of memory effects and speculatable, so each terminates and
+/// skipping it where the assertion fails is not observed. Null when an
+/// operation that is not pure, or the end of the block, comes first.
+cf::AssertOp continuationAssertion(Operation *branch) {
+  for (Operation *op = branch->getNextNode(); op; op = op->getNextNode()) {
+    if (auto assertion = dyn_cast<cf::AssertOp>(op))
+      return assertion;
+    if (!isPure(op))
+      return {};
+  }
+  return {};
 }
 
-/// Whether the arm `region` is pure (isPureArm) and every value it yields is a
-/// `ub.poison`: taken, it does nothing and gives its readers no value.
-bool yieldsOnlyPoison(Region &region) {
-  if (!isPureArm(region))
-    return false;
-  return llvm::all_of(region.front().getTerminator()->getOperands(),
-                      [](Value yielded) {
-                        return yielded.getDefiningOp<ub::PoisonOp>();
-                      });
+/// Whether the arm `region` may be skipped where a run that takes it ends at a
+/// later assertion: every operation of it free of memory effects. True for an
+/// absent arm.
+bool skippable(Region &region) {
+  if (region.empty())
+    return true;
+  return llvm::all_of(region.front(),
+                      [](Operation &op) { return isMemoryEffectFree(&op); });
+}
+
+/// Whether `value` is `condition` negated: `arith.xori %condition, true`.
+bool isNegationOf(Value value, Value condition) {
+  auto negation = value.getDefiningOp<arith::XOrIOp>();
+  return negation && negation.getLhs() == condition &&
+         matchPattern(negation.getRhs(), m_One());
+}
+
+/// The case value `condition` holds exactly where `select` takes: a constant k
+/// compared for equality with the switch's value (`arith.cmpi eq`), or, for a
+/// switch on a sum's `sum.tag`, `sum.is_variant` of that sum and k, the form
+/// the comparison takes as a question about the sum (TagOp's CompareOfTag).
+/// None for any other condition.
+std::optional<int64_t> selectedValue(Value condition,
+                                     scf::IndexSwitchOp select) {
+  Value arg = select.getArg();
+  if (auto compare = condition.getDefiningOp<arith::CmpIOp>()) {
+    if (compare.getPredicate() != arith::CmpIPredicate::eq)
+      return std::nullopt;
+    Value other = compare.getLhs() == arg ? compare.getRhs()
+                  : compare.getRhs() == arg ? compare.getLhs()
+                                            : Value();
+    APInt value;
+    if (!other || !matchPattern(other, m_ConstantInt(&value)))
+      return std::nullopt;
+    return value.getSExtValue();
+  }
+  auto holds = condition.getDefiningOp<IsVariantOp>();
+  auto tag = arg.getDefiningOp<TagOp>();
+  if (!holds || !tag || holds.getInput() != tag.getInput())
+    return std::nullopt;
+  return static_cast<int64_t>(holds.getIndex().getZExtValue());
 }
 
 /// Replaces `op` with the arm `region`: the arm's operations inlined before
@@ -82,11 +123,15 @@ void replaceWithArm(PatternRewriter &rewriter, Operation *op, Region &region) {
   rewriter.eraseOp(yield);
 }
 
-/// An `scf.if` exactly one of whose arms aborts (abortingAssertion) becomes the
-/// assertion, with that arm's message and location, of the condition under which
-/// the `scf.if` takes its other arm, followed by the other arm. An absent else
-/// arm yields nothing and does not abort, so an `scf.if` without one whose then
-/// arm aborts becomes the assertion that its condition is false.
+/// An `scf.if` exactly one of whose arms cannot complete becomes the assertion
+/// of the condition under which it takes its other arm, followed by the other
+/// arm. The arm aborts (abortingAssertion), and the assertion carries that
+/// arm's message and location; or, with no arm aborting, the continuation
+/// asserts the condition or its negation (continuationAssertion) and the arm it
+/// refutes is skippable, and that assertion moves ahead of the live arm with
+/// its message and location. An absent else arm yields nothing and does not
+/// abort, so an `scf.if` without one whose then arm cannot complete becomes the
+/// assertion that its condition is false.
 struct IfWithAbortingArm : OpRewritePattern<scf::IfOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -94,6 +139,19 @@ struct IfWithAbortingArm : OpRewritePattern<scf::IfOp> {
                                 PatternRewriter &rewriter) const override {
     cf::AssertOp thenAborts = abortingAssertion(op.getThenRegion());
     cf::AssertOp elseAborts = abortingAssertion(op.getElseRegion());
+    // The continuation's assertion that refutes an arm, moved by the rewrite.
+    cf::AssertOp refuting;
+    if (!thenAborts && !elseAborts) {
+      refuting = continuationAssertion(op);
+      if (refuting && refuting.getArg() == op.getCondition() &&
+          skippable(op.getElseRegion()))
+        elseAborts = refuting;
+      else if (refuting && isNegationOf(refuting.getArg(), op.getCondition()) &&
+               skippable(op.getThenRegion()))
+        thenAborts = refuting;
+      else
+        return rewriter.notifyMatchFailure(op, "no arm cannot complete");
+    }
     if (static_cast<bool>(thenAborts) == static_cast<bool>(elseAborts))
       return rewriter.notifyMatchFailure(op, "not exactly one arm aborts");
     Value taken = op.getCondition();
@@ -106,6 +164,8 @@ struct IfWithAbortingArm : OpRewritePattern<scf::IfOp> {
       live = &op.getElseRegion();
     }
     cf::AssertOp::create(rewriter, aborting.getLoc(), taken, aborting.getMsg());
+    if (refuting)
+      rewriter.eraseOp(refuting);
     if (live->empty())
       rewriter.eraseOp(op);
     else
@@ -114,13 +174,17 @@ struct IfWithAbortingArm : OpRewritePattern<scf::IfOp> {
   }
 };
 
-/// An `scf.index_switch` all of whose arms but one abort (abortingAssertion)
-/// becomes assertions followed by the live arm: for each aborting case, that the
-/// switch's value is not the case's, with the case's message; then, when the
-/// default arm aborts, that the value is the live case's, with the default's
-/// message. The case values are distinct, so the assertions fail exactly on the
-/// values that select an aborting arm, and the first to fail is the one that
-/// carries that arm's message.
+/// An `scf.index_switch` all of whose arms but one cannot complete becomes
+/// assertions followed by the live arm. When every other arm aborts
+/// (abortingAssertion): for each aborting case, the assertion that the switch's
+/// value is not the case's, with the case's message; then, when the default
+/// arm aborts, that the value is the live case's, with the default's message.
+/// The case values are distinct, so the assertions fail exactly on the values
+/// that select an aborting arm, and the first to fail is the one that carries
+/// that arm's message. When no arm aborts, the continuation's assertion
+/// (continuationAssertion) that the switch's value is one case's
+/// (selectedValue) refutes every other arm, each of which must be skippable,
+/// and moves ahead of that case's arm with its message and location.
 struct IndexSwitchWithAbortingArms : OpRewritePattern<scf::IndexSwitchOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -135,48 +199,49 @@ struct IndexSwitchWithAbortingArms : OpRewritePattern<scf::IndexSwitchOp> {
         llvm::map_to_vector(arms, [](Region *arm) {
           return abortingAssertion(*arm);
         });
-    if (llvm::count(aborting, cf::AssertOp()) != 1)
-      return rewriter.notifyMatchFailure(op, "not all arms but one abort");
-    size_t live = llvm::find(aborting, cf::AssertOp()) - aborting.begin();
-
     Location loc = op.getLoc();
     auto assertSelects = [&](arith::CmpIPredicate predicate, int64_t value,
-                             cf::AssertOp arm) {
+                             Location at, StringRef message) {
       Value caseValue = arith::ConstantIndexOp::create(rewriter, loc, value);
       Value holds = arith::CmpIOp::create(rewriter, loc, predicate,
                                           op.getArg(), caseValue);
-      cf::AssertOp::create(rewriter, arm.getLoc(), holds, arm.getMsg());
+      cf::AssertOp::create(rewriter, at, holds, message);
     };
-    for (auto [index, value] : llvm::enumerate(op.getCases()))
-      if (index != live)
-        assertSelects(arith::CmpIPredicate::ne, value, aborting[index]);
-    if (live != op.getNumCases())
-      assertSelects(arith::CmpIPredicate::eq, op.getCases()[live],
-                    aborting.back());
-    replaceWithArm(rewriter, op, *arms[live]);
-    return success();
-  }
-};
 
-/// An `scf.if` one of whose arms yields only poison (yieldsOnlyPoison) and whose
-/// other arm is pure (isPureArm) becomes that other arm, inlined before it.
-/// Where the branch takes the poison arm its results are poison, which the
-/// other arm's values refine, and the other arm, pure, may run there.
-struct IfWithPoisonArm : OpRewritePattern<scf::IfOp> {
-  using OpRewritePattern::OpRewritePattern;
+    size_t abortingArms = arms.size() - llvm::count(aborting, cf::AssertOp());
+    if (abortingArms == arms.size() - 1) {
+      size_t live = llvm::find(aborting, cf::AssertOp()) - aborting.begin();
+      for (auto [index, value] : llvm::enumerate(op.getCases()))
+        if (index != live)
+          assertSelects(arith::CmpIPredicate::ne, value,
+                        aborting[index].getLoc(), aborting[index].getMsg());
+      if (live != op.getNumCases())
+        assertSelects(arith::CmpIPredicate::eq, op.getCases()[live],
+                      aborting.back().getLoc(), aborting.back().getMsg());
+      replaceWithArm(rewriter, op, *arms[live]);
+      return success();
+    }
+    if (abortingArms != 0)
+      return rewriter.notifyMatchFailure(op, "not all arms but one abort");
 
-  LogicalResult matchAndRewrite(scf::IfOp op,
-                                PatternRewriter &rewriter) const override {
-    if (op.getNumResults() == 0)
-      return rewriter.notifyMatchFailure(op, "the branch yields nothing");
-    Region &then = op.getThenRegion(), &otherwise = op.getElseRegion();
-    if (yieldsOnlyPoison(otherwise) && isPureArm(then))
-      replaceWithArm(rewriter, op, then);
-    else if (yieldsOnlyPoison(then) && isPureArm(otherwise))
-      replaceWithArm(rewriter, op, otherwise);
-    else
+    // The live arm is the case the continuation asserts the value selects,
+    // which the switch takes exactly where the assertion holds.
+    cf::AssertOp refuting = continuationAssertion(op);
+    std::optional<int64_t> selected =
+        refuting ? selectedValue(refuting.getArg(), op) : std::nullopt;
+    const int64_t *found =
+        selected ? llvm::find(op.getCases(), *selected) : op.getCases().end();
+    if (found == op.getCases().end())
       return rewriter.notifyMatchFailure(
-          op, "no arm yields only poison beside a pure arm");
+          op, "the continuation asserts no case's value");
+    size_t live = found - op.getCases().begin();
+    for (auto [index, arm] : llvm::enumerate(arms))
+      if (index != live && !skippable(*arm))
+        return rewriter.notifyMatchFailure(op, "a refuted arm has effects");
+    assertSelects(arith::CmpIPredicate::eq, *selected, refuting.getLoc(),
+                  refuting.getMsg());
+    rewriter.eraseOp(refuting);
+    replaceWithArm(rewriter, op, *arms[live]);
     return success();
   }
 };
@@ -184,7 +249,7 @@ struct IfWithPoisonArm : OpRewritePattern<scf::IfOp> {
 } // namespace
 
 void populateBranchArmPatterns(RewritePatternSet &patterns) {
-  patterns.add<IfWithAbortingArm, IndexSwitchWithAbortingArms, IfWithPoisonArm>(
+  patterns.add<IfWithAbortingArm, IndexSwitchWithAbortingArms>(
       patterns.getContext());
 }
 

@@ -1,18 +1,15 @@
 #include "SumLeafConversion.hpp"
-#include "ConvertToSCF.hpp"
-#include "RebuiltSum.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
 #include <LeafBufferAlignment.hpp>
 #include <LeafConversion.hpp>
 #include <StridedEnvelope.hpp>
+#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/MemRef/IR/MemRef.h>
-#include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/Dialect/UB/IR/UBOps.h>
 #include <mlir/Dialect/Utils/StaticValueUtils.h>
 #include <mlir/IR/BuiltinTypes.h>
-#include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Transforms/DialectConversion.h>
 
 namespace mlir::sum {
@@ -62,47 +59,6 @@ Value absentLeaf(OpBuilder &builder, Location loc, Type type) {
                                            viewOffset, viewSizes, viewStrides);
 }
 
-bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter);
-
-/// Whether every operation of `arm` but its terminator rebuilds from values
-/// defined outside the switch: a nested rebuild (isLeafRebuild), or an operation
-/// free of memory effects and speculatable, as the makes the materialization
-/// mints are. An arm that allocates, reads or writes memory, or calls computes
-/// its payload rather than rebuilding it.
-bool rebuildsFromOutside(Region &arm, const TypeConverter &converter) {
-  for (Operation &op : arm.front().without_terminator()) {
-    auto nested = dyn_cast<scf::IndexSwitchOp>(op);
-    if (!(nested && isLeafRebuild(nested, converter)) && !isPure(&op))
-      return false;
-  }
-  return true;
-}
-
-/// Whether `select` is the source materialization's rebuild of a sum
-/// (RebuiltSum) exactly: every arm rebuilds from values defined outside the
-/// switch (rebuildsFromOutside), and a payload defined outside is a leaf under
-/// `converter`. A switch whose arm computes a buffer is no rebuild, so the
-/// conversion flattens it and the buffer crosses as a leaf of its results
-/// instead of hiding inside the sum.
-bool isLeafRebuild(scf::IndexSwitchOp select, const TypeConverter &converter) {
-  if (select->getNumResults() != 1)
-    return false;
-  std::optional<RebuiltSum> rebuilt = RebuiltSum::match(select->getResult(0));
-  if (!rebuilt)
-    return false;
-  for (size_t variant = 0, e = rebuilt->getNumArms(); variant != e;
-       ++variant) {
-    Region &arm = rebuilt->getArm(variant);
-    if (!rebuildsFromOutside(arm, converter))
-      return false;
-    Value payload = rebuilt->getMake(variant).getPayload();
-    if (payload && !arm.isAncestor(payload.getParentRegion()) &&
-        !converter.isLegal(payload.getType()))
-      return false;
-  }
-  return true;
-}
-
 } // namespace
 
 void populateSumLeafTypes(TypeConverter &converter) {
@@ -119,10 +75,11 @@ void populateSumLeafTypes(TypeConverter &converter) {
         return success();
       });
 
-  // The leaves are the tag and then each payload's leaves. The switch on the
-  // tag selects the arm of the variant the tag names, and only that arm rebuilds
-  // its payload, so a payload the sum does not carry, a nested sum's tag
-  // included, is never read: the rebuild keeps the guard the take-apart states.
+  // The leaves are the tag and then each payload's leaves. The sum is one
+  // assemble of the tag and each variant's payload rebuilt from its slice of
+  // the leaves, so every read of it is a projection that folds to the leaf it
+  // reads (RebuiltSum), however deeply sums nest, and no read branches on a
+  // tag.
   converter.addSourceMaterialization(
       [&converter](OpBuilder &builder, SumType type, ValueRange leaves,
                    Location loc) -> Value {
@@ -136,33 +93,22 @@ void populateSumLeafTypes(TypeConverter &converter) {
             lowering::leafSlices(converter, payloads, leaves.drop_front());
         if (failed(slices))
           return Value();
-
-        bool rebuilt = true;
-        scf::IndexSwitchOp select = createVariantSwitch(
-            builder, loc, TypeRange{type}, leaves.front(), variants.size(),
-            [&](size_t variant, Region &arm) {
-              OpBuilder::InsertionGuard guard(builder);
-              builder.createBlock(&arm);
-              FailureOr<SmallVector<Value>> payload = lowering::valuesFromLeaves(
-                  converter, builder, loc, payloads[variant], (*slices)[variant]);
-              Value made;
-              if (succeeded(payload)) {
-                made = MakeOp::create(
-                    builder, loc, type, builder.getIndexAttr(variant),
-                    payload->empty() ? Value() : payload->front());
-              } else {
-                // The arm still yields, so the switch stays valid while the
-                // materialization reports its failure.
-                rebuilt = false;
-                made = ub::PoisonOp::create(builder, loc, type);
-              }
-              scf::YieldOp::create(builder, loc, made);
-            });
-        return rebuilt ? select.getResult(0) : Value();
+        SmallVector<Value> rebuilt;
+        for (size_t index = 0; index != variants.size(); ++index) {
+          FailureOr<SmallVector<Value>> payload = lowering::valuesFromLeaves(
+              converter, builder, loc, payloads[index], (*slices)[index]);
+          if (failed(payload))
+            return Value();
+          llvm::append_range(rebuilt, *payload);
+        }
+        return AssembleOp::create(builder, loc, type, leaves.front(), rebuilt);
       });
 
-  // A payload is read only under its own variant's guard, the precondition
-  // `sum.get` states; the other path yields the payload's absent leaves.
+  // Each payload leaf is the read of its payload where the sum holds the
+  // payload's variant and the leaf's stand-in (absentLeaf) elsewhere, chosen by
+  // a select: a read of the payload of a variant the sum does not hold is
+  // poison (GetOp), which the select does not choose there, so no branch guards
+  // the read. A stand-in that is poison folds the select away.
   converter.addTargetMaterialization(
       [&converter](OpBuilder &builder, TypeRange, ValueRange inputs,
                    Location loc, Type) -> SmallVector<Value> {
@@ -182,55 +128,20 @@ void populateSumLeafTypes(TypeConverter &converter) {
           if (payloadLeaves.empty())
             continue;
           Value holds = IsVariantOp::create(builder, loc, value, int64_t(index));
-          auto read = scf::IfOp::create(builder, loc, payloadLeaves, holds,
-                                        /*addThenBlock=*/true,
-                                        /*addElseBlock=*/true);
-          {
-            OpBuilder::InsertionGuard guard(builder);
-            builder.setInsertionPointToStart(read.thenBlock());
-            Value payload = GetOp::create(builder, loc, value, int64_t(index));
-            SmallVector<Value> carried;
-            if (failed(lowering::appendLeaves(converter, builder, loc, payload,
-                                              carried)))
+          Value payload = GetOp::create(builder, loc, value, int64_t(index));
+          SmallVector<Value> read;
+          if (failed(lowering::appendLeaves(converter, builder, loc, payload,
+                                            read)))
+            return {};
+          for (auto [leaf, leafType] : llvm::zip_equal(read, payloadLeaves)) {
+            Value stand = absentLeaf(builder, loc, leafType);
+            if (!stand)
               return {};
-            scf::YieldOp::create(builder, loc, carried);
-            builder.setInsertionPointToStart(read.elseBlock());
-            SmallVector<Value> absent;
-            for (Type leaf : payloadLeaves) {
-              Value stand = absentLeaf(builder, loc, leaf);
-              if (!stand)
-                return {};
-              absent.push_back(stand);
-            }
-            scf::YieldOp::create(builder, loc, absent);
+            leaves.push_back(
+                arith::SelectOp::create(builder, loc, holds, leaf, stand));
           }
-          llvm::append_range(leaves, read.getResults());
         }
         return leaves;
-      });
-}
-
-void populateSumLeafLegality(ConversionTarget &target,
-                             const TypeConverter &converter,
-                             RewritePatternSet &) {
-  // The rebuild is an scf.index_switch carrying the sum, a boundary the
-  // structural conversion would flatten into another rebuild for its every
-  // reader. It and the yields of its arms are legal instead, so one run of the
-  // conversion leaves it standing, a read of it folds where the canonicalizer
-  // can see through it (RebuiltSum), and a reader of the whole sum keeps the
-  // switch. Every other switch and yield defers to the boundary's rule.
-  target.addDynamicallyLegalOp<scf::IndexSwitchOp>(
-      [&converter](scf::IndexSwitchOp select) -> std::optional<bool> {
-        if (isLeafRebuild(select, converter))
-          return true;
-        return std::nullopt;
-      });
-  target.addDynamicallyLegalOp<scf::YieldOp>(
-      [&converter](scf::YieldOp yield) -> std::optional<bool> {
-        auto select = dyn_cast<scf::IndexSwitchOp>(yield->getParentOp());
-        if (select && isLeafRebuild(select, converter))
-          return true;
-        return std::nullopt;
       });
 }
 

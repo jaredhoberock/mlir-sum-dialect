@@ -3,19 +3,23 @@
 // A read of a sum built in view folds to what it reads. Of a make: the tag is
 // the variant made, is_variant compares it, and get reads the payload of the
 // variant made; a get of another variant states a precondition that does not
-// hold, so no value answers it and it stays. Of a sum an scf.index_switch
-// rebuilds from its tag -- arm j yielding the make of variant j, the default
-// the last variant's -- the tag is the switch's tag clamped to the last variant,
-// is_variant compares that tag, and get reads the payload arm k makes when it is
-// defined outside the arm, whichever of the switch's results the sum is. A
-// payload built inside its arm is carried out of it: the switch yields it from
-// that arm and poison from every other, the value the read has where the sum
-// holds another variant. Every read of a switch whose arms do not make their
-// own variants stays.
+// hold, so no value answers it and it stays. Of an assemble: the tag is its tag
+// operand, is_variant compares that tag, and get of every variant reads that
+// variant's payload operand. An assemble whose tag is a constant is the make of
+// that variant, and an assemble of a sum's own tag and its own payloads is the
+// sum. Of a sum an scf.index_switch rebuilds from its tag -- arm j yielding the
+// make of variant j, the default the last variant's -- the tag is the switch's
+// tag clamped to the last variant, is_variant compares that tag, and get reads
+// the payload arm k makes when it is defined outside the arm, whichever of the
+// switch's results the sum is. A payload built inside its arm does not dominate
+// the read, so the read stays. Every read of a switch whose arms do not make
+// their own variants stays.
 
 !S = !sum.sum<(i64, none, f32)>
 !I = !sum.sum<(i64, none)>
 !N = !sum.sum<(!sum.sum<(i64, none)>, none)>
+!M = memref<?xf32>
+!B = !sum.sum<(!M, none)>
 
 // CHECK-LABEL: func.func @reads_of_a_make
 // CHECK-NOT: sum.tag
@@ -31,6 +35,67 @@ func.func @reads_of_a_make(%x: i64) -> (index, i1, i1, i64, f32) {
   %p = sum.get %s, 0 : !S -> i64
   %q = sum.get %s, 2 : !S -> f32
   return %t, %a, %b, %p, %q : index, i1, i1, i64, f32
+}
+
+// CHECK-LABEL: func.func @reads_of_an_assemble
+// CHECK-SAME: (%[[TAG:.*]]: index, %[[X:.*]]: i64, %[[Y:.*]]: f32)
+// CHECK-DAG: %[[FIRST:.*]] = arith.constant 0 : index
+// CHECK-DAG: %[[LAST:.*]] = arith.constant 2 : index
+// CHECK: %[[A:.*]] = arith.cmpi eq, %[[TAG]], %[[FIRST]]
+// CHECK: %[[B:.*]] = arith.cmpi eq, %[[TAG]], %[[LAST]]
+// CHECK-NOT: sum.
+// CHECK: return %[[TAG]], %[[A]], %[[B]], %[[X]], %[[Y]]
+func.func @reads_of_an_assemble(%tag: index, %x: i64, %y: f32) -> (index, i1, i1, i64, f32) {
+  %s = sum.assemble %tag (%x, %y : i64, f32) : !S
+  %t = sum.tag %s : !S
+  %a = sum.is_variant %s, 0 : !S
+  %b = sum.is_variant %s, 2 : !S
+  %p = sum.get %s, 0 : !S -> i64
+  %q = sum.get %s, 2 : !S -> f32
+  return %t, %a, %b, %p, %q : index, i1, i1, i64, f32
+}
+
+// CHECK-LABEL: func.func @assemble_of_a_constant_tag
+// CHECK-SAME: (%[[X:.*]]: i64, %[[Y:.*]]: f32)
+// CHECK-NOT: sum.assemble
+// CHECK: %[[S:.*]] = sum.make 2 %[[Y]] : !sum.sum<(i64, none, f32)>
+// CHECK-NEXT: return %[[S]]
+func.func @assemble_of_a_constant_tag(%x: i64, %y: f32) -> !S {
+  %c2 = arith.constant 2 : index
+  %s = sum.assemble %c2 (%x, %y : i64, f32) : !S
+  return %s : !S
+}
+
+// The payload taken apart as the leaf conversion takes one apart: the read
+// where the sum holds its variant, a stand-in elsewhere.
+// CHECK-LABEL: func.func @assemble_of_its_own_parts
+// CHECK-SAME: (%[[S:.*]]: !sum.sum<(memref<?xf32>, none)>, %[[STAND:.*]]: memref<?xf32>)
+// CHECK-NOT: sum.assemble
+// CHECK: return %[[S]], %[[S]]
+func.func @assemble_of_its_own_parts(%s: !B, %stand: !M) -> (!B, !B) {
+  %t = sum.tag %s : !B
+  %p = sum.get %s, 0 : !B -> !M
+  %read = sum.assemble %t (%p : !M) : !B
+  %holds = sum.is_variant %s, 0 : !B
+  %q = arith.select %holds, %p, %stand : !M
+  %chosen = sum.assemble %t (%q : !M) : !B
+  return %read, %chosen : !B, !B
+}
+
+// The tag of one sum with the payload of another, or a payload chosen where
+// the sum holds another variant: neither is the sum.
+// CHECK-LABEL: func.func @assemble_of_other_parts
+// CHECK-COUNT-2: sum.assemble
+// CHECK: return
+func.func @assemble_of_other_parts(%s: !B, %r: !B, %stand: !M) -> (!B, !B) {
+  %t = sum.tag %s : !B
+  %p = sum.get %r, 0 : !B -> !M
+  %mixed = sum.assemble %t (%p : !M) : !B
+  %elsewhere = sum.is_variant %s, 1 : !B
+  %own = sum.get %s, 0 : !B -> !M
+  %q = arith.select %elsewhere, %own, %stand : !M
+  %wrong = sum.assemble %t (%q : !M) : !B
+  return %mixed, %wrong : !B, !B
 }
 
 // CHECK-LABEL: func.func @reads_of_a_rebuilt_sum
@@ -64,15 +129,13 @@ func.func @reads_of_a_rebuilt_sum(%tag: index, %x: i64, %y: f32) -> (index, i1, 
 
 // CHECK-LABEL: func.func @read_of_a_payload_built_in_its_arm
 // CHECK-SAME: (%[[TAG:.*]]: index, %[[X:.*]]: i64)
-// CHECK: %[[POISON:.*]] = ub.poison
-// CHECK: %[[P:.*]] = scf.index_switch %[[TAG]]
+// CHECK: %[[S:.*]] = scf.index_switch %[[TAG]]
 // CHECK-NEXT: case 0 {
 // CHECK-NEXT: %[[INNER:.*]] = sum.make 0 %[[X]]
-// CHECK-NEXT: scf.yield %[[INNER]]
-// CHECK: default {
-// CHECK-NEXT: scf.yield %[[POISON]]
-// CHECK-NOT: sum.get
-// CHECK: return %[[P]]
+// CHECK-NEXT: %[[OUTER:.*]] = sum.make 0 %[[INNER]]
+// CHECK-NEXT: scf.yield %[[OUTER]]
+// CHECK: %[[P:.*]] = sum.get %[[S]], 0
+// CHECK-NEXT: return %[[P]]
 func.func @read_of_a_payload_built_in_its_arm(%tag: index, %x: i64) -> !I {
   %s = scf.index_switch %tag -> !N
   case 0 {
