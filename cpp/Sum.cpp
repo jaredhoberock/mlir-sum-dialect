@@ -87,6 +87,8 @@ void SumDialect::getCanonicalizationPatterns(RewritePatternSet &results) const {
 
 Operation *SumDialect::materializeConstant(OpBuilder &builder, Attribute value,
                                            Type type, Location loc) {
+  if (isa<ub::PoisonAttrInterface>(value))
+    return value.getDialect().materializeConstant(builder, value, type, loc);
   return arith::ConstantOp::materialize(builder, value, type, loc);
 }
 

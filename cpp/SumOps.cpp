@@ -53,8 +53,11 @@ LogicalResult GetOp::verify() {
 /// among makes gives the payload of variant k that dominates the read
 /// (RebuiltSum::getDominatingPayload). The read is meaningful only where the
 /// sum holds variant k, and there the sum carries that payload; elsewhere the
-/// read is poison, which any value refines.
-OpFoldResult GetOp::fold(FoldAdaptor) {
+/// read is poison, which any value refines. A read of a poison sum is poison:
+/// a poison sum holds no payload that is not poison.
+OpFoldResult GetOp::fold(FoldAdaptor adaptor) {
+  if (isa_and_nonnull<ub::PoisonAttrInterface>(adaptor.getInput()))
+    return adaptor.getInput();
   uint64_t index = getIndex().getZExtValue();
   if (auto make = getInput().getDefiningOp<MakeOp>())
     return make.getPayloadOf(index);
@@ -83,8 +86,10 @@ LogicalResult IsVariantOp::verify() {
 }
 
 /// Whether a make whose tag is a constant holds variant k is whether its tag is
-/// k.
-OpFoldResult IsVariantOp::fold(FoldAdaptor) {
+/// k; whether a poison sum holds it is poison.
+OpFoldResult IsVariantOp::fold(FoldAdaptor adaptor) {
+  if (isa_and_nonnull<ub::PoisonAttrInterface>(adaptor.getInput()))
+    return adaptor.getInput();
   auto make = getInput().getDefiningOp<MakeOp>();
   if (!make)
     return {};
@@ -417,8 +422,10 @@ LogicalResult TagOp::verify() {
   return success();
 }
 
-/// The tag of a make is its tag operand.
-OpFoldResult TagOp::fold(FoldAdaptor) {
+/// The tag of a make is its tag operand; the tag of a poison sum is poison.
+OpFoldResult TagOp::fold(FoldAdaptor adaptor) {
+  if (isa_and_nonnull<ub::PoisonAttrInterface>(adaptor.getInput()))
+    return adaptor.getInput();
   if (auto make = getInput().getDefiningOp<MakeOp>())
     return make.getTag();
   return {};
