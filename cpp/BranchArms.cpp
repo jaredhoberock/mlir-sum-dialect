@@ -1,23 +1,32 @@
 // A branch with an arm that cannot complete, written as what it is.
 //
+// XXX TODO: the two rewrites here are an upstream `scf.if` and
+// `scf.index_switch` canonicalization the estate carries because upstream has
+// none: an arm that asserts false, and the assertion that follows a branch on
+// its own condition (CombineIfs' adjacency law, with an arm that aborts). They
+// are deleted when that canonicalization lands in the fork, one of the fork
+// patches docs/plans/ARRAY_TO_TENSOR_PLAN.md lists.
+//
 // Every rewrite here keeps one law: the branch becomes an assertion of the
 // condition under which it takes its live arm, followed by that arm, and
 // nothing else moves. Where the assertion holds, the program runs the same
 // operations in the same order and computes the same values. Where it fails,
 // the program ends at the assertion with the message it ended with before,
-// having skipped only operations free of memory effects, whose running is not
-// observed once the program ends. The live arm runs after the assertion of its
-// own condition, where it ran before, so no operation of it runs on a path its
-// guard excluded, and nothing is asked of the arm's operations. Whether an
-// operation may be skipped or crossed is asked only of the operations the
-// moved assertion goes ahead of on the path where it fails.
+// having skipped only pure operations: free of memory effects, whose running is
+// not observed once the program ends, and speculatable, so each terminates and
+// skipping it does not turn a run that never reached the assertion into one
+// that ends there. The live arm runs after the assertion of its own condition,
+// where it ran before, so no operation of it runs on a path its guard
+// excluded, and nothing is asked of the arm's operations. Whether an operation
+// may be skipped or crossed is asked only of the operations the moved
+// assertion goes ahead of on the path where it fails.
 //
 // An arm cannot complete in two ways. It aborts: it asserts a constant false
-// after operations free of memory effects. Or the continuation refutes it: the
-// operations after the branch, past pure ones, assert the condition under which
-// the branch takes another arm, so every run that takes this arm ends at that
-// assertion, and when the arm is free of memory effects nothing it or those
-// operations did is observed before it ends.
+// after pure operations. Or the continuation refutes it: the operations after
+// the branch, past pure ones, assert the condition under which the branch takes
+// another arm, so a run that takes this arm fails that assertion if it gets
+// there; when the arm is pure, it does, and nothing the arm or those operations
+// did is observed before it fails.
 //
 // Written so, the branch joins nothing, and a value its live arm computes
 // reaches the readers of the branch's result as itself, its producer and its
@@ -25,6 +34,7 @@
 // the other arm's, which no fold sees through.
 #include "BranchArms.hpp"
 #include "SumOps.hpp"
+#include "SumTypeInterface.hpp"
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/ControlFlow/IR/ControlFlowOps.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
@@ -37,11 +47,12 @@ namespace mlir::sum {
 namespace {
 
 /// The assertion that makes the arm `region` abort: a `cf.assert` of a constant
-/// false, every operation before it in the arm free of memory effects. Null when
-/// the arm has none, and for an absent arm. An arm that writes memory, or
-/// asserts anything else, before its false assertion does not abort here: what
-/// it does before the program ends is observable, so the branch is left as it
-/// stands.
+/// false, every operation before it in the arm pure. Null when the arm has
+/// none, and for an absent arm. An arm that writes memory, asserts anything
+/// else, or runs an operation that may not terminate before its false
+/// assertion does not abort here: what it does before the program ends is
+/// observable, and it may never reach the assertion, so the branch is left as
+/// it stands.
 cf::AssertOp abortingAssertion(Region &region) {
   if (region.empty())
     return {};
@@ -49,7 +60,7 @@ cf::AssertOp abortingAssertion(Region &region) {
     if (auto assertion = dyn_cast<cf::AssertOp>(op))
       if (matchPattern(assertion.getArg(), m_Zero()))
         return assertion;
-    if (!isMemoryEffectFree(&op))
+    if (!isPure(&op))
       return {};
   }
   return {};
@@ -70,13 +81,13 @@ cf::AssertOp continuationAssertion(Operation *branch) {
 }
 
 /// Whether the arm `region` may be skipped where a run that takes it ends at a
-/// later assertion: every operation of it free of memory effects. True for an
-/// absent arm.
+/// later assertion: every operation of it pure, so it changes nothing observed
+/// and it ends, and the run reaches that assertion. True for an absent arm.
 bool skippable(Region &region) {
   if (region.empty())
     return true;
   return llvm::all_of(region.front(),
-                      [](Operation &op) { return isMemoryEffectFree(&op); });
+                      [](Operation &op) { return isPure(&op); });
 }
 
 /// Whether `value` is `condition` negated: `arith.xori %condition, true`.
@@ -86,11 +97,11 @@ bool isNegationOf(Value value, Value condition) {
          matchPattern(negation.getRhs(), m_One());
 }
 
-/// The case value `condition` holds exactly where `select` takes: a constant k
-/// compared for equality with the switch's value (`arith.cmpi eq`), or, for a
-/// switch on a sum's `sum.tag`, `sum.is_variant` of that sum and k, the form
-/// the comparison takes as a question about the sum (TagOp's CompareOfTag).
-/// None for any other condition.
+/// The value k such that `condition` holds exactly where the switch's value is
+/// k: a constant k compared for equality with the switch's value
+/// (`arith.cmpi eq`), or, for a switch on a sum's `sum.tag`, `sum.is_variant`
+/// of that sum and k, the form the comparison takes as a question about the
+/// sum (TagOp's CompareOfTag). None for any other condition.
 std::optional<int64_t> selectedValue(Value condition,
                                      scf::IndexSwitchOp select) {
   Value arg = select.getArg();
@@ -110,6 +121,34 @@ std::optional<int64_t> selectedValue(Value condition,
   if (!holds || !tag || holds.getInput() != tag.getInput())
     return std::nullopt;
   return static_cast<int64_t>(holds.getIndex().getZExtValue());
+}
+
+/// The position among `select`'s arms (its cases, then its default) of the arm
+/// it takes exactly where its value is `value`: the case of `value`; or, for a
+/// switch on a sum's `sum.tag` whose cases name every variant of the sum but
+/// `value`, the default, which takes the tags no case names, and of a sum's
+/// tag, which names one of its variants, that is `value` alone. None
+/// otherwise: the default of any other switch also takes values other than
+/// `value`.
+std::optional<size_t> armTakenAt(int64_t value, scf::IndexSwitchOp select) {
+  ArrayRef<int64_t> cases = select.getCases();
+  const int64_t *found = llvm::find(cases, value);
+  if (found != cases.end())
+    return found - cases.begin();
+  auto tag = select.getArg().getDefiningOp<TagOp>();
+  if (!tag)
+    return std::nullopt;
+  // The case values are distinct (the switch's verifier), so n - 1 of them
+  // within the n variants, none `value`, name every variant but `value`.
+  int64_t variants =
+      cast<SumTypeInterface>(tag.getInput().getType()).getNumVariants();
+  auto isVariant = [&](int64_t variant) {
+    return variant >= 0 && variant < variants;
+  };
+  if (!isVariant(value) || static_cast<int64_t>(cases.size()) + 1 != variants ||
+      !llvm::all_of(cases, isVariant))
+    return std::nullopt;
+  return cases.size();
 }
 
 /// Replaces `op` with the arm `region`: the arm's operations inlined before
@@ -182,9 +221,10 @@ struct IfWithAbortingArm : OpRewritePattern<scf::IfOp> {
 /// The case values are distinct, so the assertions fail exactly on the values
 /// that select an aborting arm, and the first to fail is the one that carries
 /// that arm's message. When no arm aborts, the continuation's assertion
-/// (continuationAssertion) that the switch's value is one case's
-/// (selectedValue) refutes every other arm, each of which must be skippable,
-/// and moves ahead of that case's arm with its message and location.
+/// (continuationAssertion) that the switch's value is a value (selectedValue)
+/// whose arm the switch takes exactly there (armTakenAt) refutes every other
+/// arm, each of which must be skippable, and moves ahead of that arm with its
+/// message and location.
 struct IndexSwitchWithAbortingArms : OpRewritePattern<scf::IndexSwitchOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -224,20 +264,20 @@ struct IndexSwitchWithAbortingArms : OpRewritePattern<scf::IndexSwitchOp> {
     if (abortingArms != 0)
       return rewriter.notifyMatchFailure(op, "not all arms but one abort");
 
-    // The live arm is the case the continuation asserts the value selects,
-    // which the switch takes exactly where the assertion holds.
+    // The live arm is the one the switch takes exactly where the
+    // continuation's assertion holds.
     cf::AssertOp refuting = continuationAssertion(op);
     std::optional<int64_t> selected =
         refuting ? selectedValue(refuting.getArg(), op) : std::nullopt;
-    const int64_t *found =
-        selected ? llvm::find(op.getCases(), *selected) : op.getCases().end();
-    if (found == op.getCases().end())
+    std::optional<size_t> taken =
+        selected ? armTakenAt(*selected, op) : std::nullopt;
+    if (!taken)
       return rewriter.notifyMatchFailure(
-          op, "the continuation asserts no case's value");
-    size_t live = found - op.getCases().begin();
+          op, "the continuation asserts no value one arm alone takes");
+    size_t live = *taken;
     for (auto [index, arm] : llvm::enumerate(arms))
       if (index != live && !skippable(*arm))
-        return rewriter.notifyMatchFailure(op, "a refuted arm has effects");
+        return rewriter.notifyMatchFailure(op, "a refuted arm is not pure");
     assertSelects(arith::CmpIPredicate::eq, *selected, refuting.getLoc(),
                   refuting.getMsg());
     rewriter.eraseOp(refuting);

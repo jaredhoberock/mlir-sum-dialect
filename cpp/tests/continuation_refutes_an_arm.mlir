@@ -7,9 +7,13 @@
 // else arm. The live arm runs after the assertion of its own condition, where
 // it ran before, whatever its operations: one that reads memory, a loop, a
 // read of a tensor. An scf.index_switch followed by the assertion that its
-// value is one case's is that assertion followed by that case. A store between
-// the branch and the assertion, or a refuted arm with effects, keeps the
-// branch.
+// value is one case's is that assertion followed by that case; a switch on a
+// sum's tag whose cases name every variant but one, followed by the assertion
+// that the sum holds that one, is that assertion followed by its default. A
+// refuted arm is skipped only when it is pure: one with effects, or with a loop
+// that may never end, keeps the branch, since a run that takes it may never
+// reach the assertion; a counted loop ends and is skipped. A store between the
+// branch and the assertion keeps the branch.
 
 !O = !sum.sum<(i64, none)>
 
@@ -234,4 +238,159 @@ func.func @switch_with_an_assertion_of_no_case(%arg: index, %m: memref<i64>, %x:
   %selected = arith.cmpi eq, %arg, %c3 : index
   cf.assert %selected, "not three"
   return %r : i64
+}
+
+// CHECK-LABEL: func.func @refuted_arm_with_an_endless_loop_keeps_the_branch
+// CHECK: scf.if
+// CHECK: } else {
+// CHECK-NEXT: scf.while
+// CHECK: cf.assert
+func.func @refuted_arm_with_an_endless_loop_keeps_the_branch(%o: !O, %m: memref<i64>, %x: i64, %go: i1) -> i64 {
+  %one = arith.constant 1 : i64
+  %some = sum.is_variant %o, 0 : !O
+  %r = scf.if %some -> i64 {
+    %v = memref.load %m[] : memref<i64>
+    scf.yield %v : i64
+  } else {
+    %n = scf.while (%y = %x) : (i64) -> i64 {
+      scf.condition(%go) %y : i64
+    } do {
+    ^bb0(%y: i64):
+      %z = arith.addi %y, %one : i64
+      scf.yield %z : i64
+    }
+    scf.yield %n : i64
+  }
+  cf.assert %some, "unwrap on None"
+  return %r : i64
+}
+
+// CHECK-LABEL: func.func @refuted_switch_arm_with_an_endless_loop_keeps_the_switch
+// CHECK: scf.index_switch
+// CHECK: default {
+// CHECK-NEXT: scf.while
+// CHECK: cf.assert
+func.func @refuted_switch_arm_with_an_endless_loop_keeps_the_switch(%arg: index, %m: memref<i64>, %x: i64, %go: i1) -> i64 {
+  %c0 = arith.constant 0 : index
+  %one = arith.constant 1 : i64
+  %r = scf.index_switch %arg -> i64
+  case 0 {
+    %v = memref.load %m[] : memref<i64>
+    scf.yield %v : i64
+  }
+  default {
+    %n = scf.while (%y = %x) : (i64) -> i64 {
+      scf.condition(%go) %y : i64
+    } do {
+    ^bb0(%y: i64):
+      %z = arith.addi %y, %one : i64
+      scf.yield %z : i64
+    }
+    scf.yield %n : i64
+  }
+  %selected = arith.cmpi eq, %arg, %c0 : index
+  cf.assert %selected, "not zero"
+  return %r : i64
+}
+
+// CHECK-LABEL: func.func @refuted_arm_with_a_counted_loop_is_skipped
+// CHECK-SAME: (%[[O:.*]]: !sum.sum<(i64, none)>, %[[M:.*]]: memref<i64>
+// CHECK-NOT: scf.if
+// CHECK-NOT: scf.for
+// CHECK: %[[SOME:.*]] = sum.is_variant %[[O]], 0
+// CHECK-NEXT: cf.assert %[[SOME]], "unwrap on None"
+// CHECK-NEXT: %[[V:.*]] = memref.load %[[M]]
+// CHECK-NEXT: return %[[V]]
+func.func @refuted_arm_with_a_counted_loop_is_skipped(%o: !O, %m: memref<i64>, %x: i64, %n: index) -> i64 {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %one = arith.constant 1 : i64
+  %some = sum.is_variant %o, 0 : !O
+  %r = scf.if %some -> i64 {
+    %v = memref.load %m[] : memref<i64>
+    scf.yield %v : i64
+  } else {
+    %n2 = scf.for %i = %c0 to %n step %c1 iter_args(%y = %x) -> i64 {
+      %z = arith.addi %y, %one : i64
+      scf.yield %z : i64
+    }
+    scf.yield %n2 : i64
+  }
+  cf.assert %some, "unwrap on None"
+  return %r : i64
+}
+
+!T = !sum.sum<(i64, none, f32)>
+
+// The lowered match of a three-variant sum: cases for variants 0 and 1, the
+// default for variant 2, which, of a sum's tag, the default takes alone. The
+// assertion that the sum holds variant 2 refutes both cases and keeps the
+// default, in either spelling of the question.
+// CHECK-LABEL: func.func @switch_on_a_tag_whose_default_is_the_last_variant
+// CHECK-SAME: (%[[S:.*]]: !sum.sum<(i64, none, f32)>, %[[M:.*]]: memref<f32>, %[[N:.*]]: memref<f32>)
+// CHECK-NOT: scf.index_switch
+// CHECK: %[[LAST:.*]] = sum.is_variant %[[S]], 2
+// CHECK-NEXT: cf.assert %[[LAST]], "not the last variant"
+// CHECK-NEXT: %[[P:.*]] = sum.get %[[S]], 2
+// CHECK-NEXT: memref.store %[[P]], %[[M]]
+// CHECK-NEXT: %[[LAST2:.*]] = sum.is_variant %[[S]], 2
+// CHECK-NEXT: cf.assert %[[LAST2]], "again not the last variant"
+// CHECK-NEXT: %[[Q:.*]] = sum.get %[[S]], 2
+// CHECK-NEXT: memref.store %[[Q]], %[[N]]
+// CHECK-NOT: scf.index_switch
+// CHECK: return
+func.func @switch_on_a_tag_whose_default_is_the_last_variant(%s: !T, %m: memref<f32>, %n: memref<f32>) {
+  %t = sum.tag %s : !T
+  scf.index_switch %t
+  case 0 {
+    scf.yield
+  }
+  case 1 {
+    scf.yield
+  }
+  default {
+    %p = sum.get %s, 2 : !T -> f32
+    memref.store %p, %m[] : memref<f32>
+    scf.yield
+  }
+  %last = sum.is_variant %s, 2 : !T
+  cf.assert %last, "not the last variant"
+  %u = sum.tag %s : !T
+  scf.index_switch %u
+  case 0 {
+    scf.yield
+  }
+  case 1 {
+    scf.yield
+  }
+  default {
+    %q = sum.get %s, 2 : !T -> f32
+    memref.store %q, %n[] : memref<f32>
+    scf.yield
+  }
+  %c2 = arith.constant 2 : index
+  %again = arith.cmpi eq, %u, %c2 : index
+  cf.assert %again, "again not the last variant"
+  return
+}
+
+// The default of a switch on a sum's tag with a case for variant 0 alone stands
+// for variants 1 and 2, so the assertion that the sum holds variant 2 does not
+// say the switch takes the default exactly there.
+// CHECK-LABEL: func.func @switch_on_a_tag_whose_default_is_two_variants
+// CHECK: scf.index_switch
+// CHECK: cf.assert
+func.func @switch_on_a_tag_whose_default_is_two_variants(%s: !T, %m: memref<f32>, %x: f32) {
+  %t = sum.tag %s : !T
+  scf.index_switch %t
+  case 0 {
+    scf.yield
+  }
+  default {
+    memref.store %x, %m[] : memref<f32>
+    scf.yield
+  }
+  %last = sum.is_variant %s, 2 : !T
+  cf.assert %last, "not the last variant"
+  return
 }
