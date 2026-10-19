@@ -3,7 +3,6 @@
 #include "SumOps.hpp"
 #include "SumTypes.hpp"
 #include <LeafConversion.hpp>
-#include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/Transforms/DialectConversion.h>
 
@@ -51,14 +50,13 @@ void populateSumLeafTypes(TypeConverter &converter) {
         return MakeOp::create(builder, loc, type, leaves.front(), rebuilt);
       });
 
-  // Each payload leaf is the read of its payload where the sum holds the
-  // payload's variant and the leaf's stand-in elsewhere, chosen by a select: a
-  // read of the payload of a variant the sum does not hold is poison (GetOp),
-  // which the select does not choose there, so no branch guards the read. The
-  // stand-in is the absent value the leaf type's owner states
-  // (lowering::absentLeaf), defined where the owner's lowering states a fact
-  // of every value of the type; a stand-in that is poison folds the select
-  // away.
+  // Each payload leaf is the read of its payload: a read of the payload of a
+  // variant the sum does not hold is poison (GetOp), which is what a leaf of a
+  // variant the sum does not hold may be, so no branch guards the read and no
+  // value stands in for it. A sum made from leaves gives those leaves back,
+  // each read folding to the make's operand. Each leaf type's owner lowers a
+  // poison of its type to a defined value where its lowering states a fact of
+  // every value of the type.
   converter.addTargetMaterialization(
       [&converter](OpBuilder &builder, TypeRange, ValueRange inputs,
                    Location loc, Type) -> SmallVector<Value> {
@@ -77,16 +75,10 @@ void populateSumLeafTypes(TypeConverter &converter) {
             return {};
           if (payloadLeaves.empty())
             continue;
-          Value holds = IsVariantOp::create(builder, loc, value, int64_t(index));
           Value payload = GetOp::create(builder, loc, value, int64_t(index));
-          SmallVector<Value> read;
           if (failed(lowering::appendLeaves(converter, builder, loc, payload,
-                                            read)))
+                                            leaves)))
             return {};
-          for (auto [leaf, leafType] : llvm::zip_equal(read, payloadLeaves))
-            leaves.push_back(arith::SelectOp::create(
-                builder, loc, holds, leaf,
-                lowering::absentLeaf(builder, loc, leafType)));
         }
         return leaves;
       });

@@ -11,12 +11,11 @@ namespace sum {
 /// a payload, in variant order. Its source materialization rebuilds the sum as
 /// one `sum.make` of the tag and every variant's payload, each rebuilt from
 /// its leaves, so every read of the rebuilt sum folds to a leaf. Its target
-/// materialization reads the tag with `sum.tag`, and each payload leaf as the
-/// select, on `sum.is_variant`, of the leaf of the payload `sum.get` reads and
-/// a stand-in for an absent leaf: an automatic allocation with the leaf's type
-/// for a buffer, holding no element unless the type fixes some, and `ub.poison`
-/// for anything else. Neither branches. Payloads convert and materialize
-/// through `converter`, whatever dialect owns them.
+/// materialization reads the tag with `sum.tag` and each payload's leaves from
+/// the payload `sum.get` reads, which is poison where the sum holds another
+/// variant, so no leaf stands in for an absent one and neither materialization
+/// branches. Payloads convert and materialize through `converter`, whatever
+/// dialect owns them.
 void populateSumLeafTypes(TypeConverter &converter);
 
 } // namespace sum
