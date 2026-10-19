@@ -21,10 +21,13 @@ func.func @tag_of_a_sum_an_if_selects(%c: i1, %x: i64) -> (i1, i1, i1) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
   %s = scf.if %c -> !O {
-    %m = sum.make 0 %x : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   %t = sum.tag %s : !O

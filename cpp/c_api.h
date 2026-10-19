@@ -26,8 +26,10 @@ MlirOperation sumGetOpCreate(MlirLocation loc, MlirValue input, int64_t index);
 
 MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t index);
 
-// payload may be {nullptr} for nullary variants
-MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index, MlirValue payload);
+// tag is an index; payloads holds one value per variant that carries a payload,
+// in variant order
+MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, MlirValue tag,
+                              const MlirValue *payloads, intptr_t nPayloads);
 
 MlirOperation sumMatchOpCreate(MlirLocation loc, MlirValue input, const MlirType *resultTypes, intptr_t nResults);
 

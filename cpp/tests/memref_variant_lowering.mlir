@@ -11,7 +11,8 @@
 module {
   func.func @wrap(%x: memref<?xi64, strided<[1], offset: ?>>)
       -> !sum.sum<(memref<?xi64, strided<[1], offset: ?>>, none)> {
-    %s = sum.make 0 %x : !sum.sum<(memref<?xi64, strided<[1], offset: ?>>, none)>
+    %s_tag = arith.constant 0 : index
+    %s = sum.make %s_tag (%x : memref<?xi64, strided<[1], offset: ?>>) : !sum.sum<(memref<?xi64, strided<[1], offset: ?>>, none)>
     return %s : !sum.sum<(memref<?xi64, strided<[1], offset: ?>>, none)>
   }
 
@@ -24,7 +25,8 @@ module {
   // CHECK: llvm.return
   func.func @wrap_memref_of_sums(%x: memref<4x!sum.sum<(i64, none)>>)
       -> !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)> {
-    %s = sum.make 0 %x : !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)>
+    %s_tag = arith.constant 0 : index
+    %s = sum.make %s_tag (%x : memref<4x!sum.sum<(i64, none)>>) : !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)>
     return %s : !sum.sum<(memref<4x!sum.sum<(i64, none)>>, none)>
   }
 }

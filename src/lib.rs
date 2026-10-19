@@ -13,7 +13,7 @@ unsafe extern "C" {
     fn sumSumTypeGetVariant(ty: MlirType, index: isize) -> MlirType;
     fn sumGetOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
     fn sumIsVariantOpCreate(loc: MlirLocation, input: MlirValue, index: i64) -> MlirOperation;
-    fn sumMakeOpCreate(loc: MlirLocation, resultTy: MlirType, index: i64, payload: MlirValue) -> MlirOperation;
+    fn sumMakeOpCreate(loc: MlirLocation, resultTy: MlirType, tag: MlirValue, payloads: *const MlirValue, nPayloads: isize) -> MlirOperation;
     fn sumMatchOpCreate(loc: MlirLocation, input: MlirValue, resultTypes: *const MlirType, nResults: isize) -> MlirOperation;
     fn sumTagOpCreate(loc: MlirLocation, input: MlirValue) -> MlirOperation;
     fn sumYieldOpCreate(loc: MlirLocation, results: *const MlirValue, nResults: isize) -> MlirOperation;
@@ -81,22 +81,21 @@ pub fn is_variant<'c>(
     }
 }
 
+/// A `sum.make` of `result_ty` holding the variant `tag` (an index) names, with
+/// one payload per variant that carries one, in variant order.
 pub fn make<'c>(
     loc: Location<'c>,
     result_ty: Type<'c>,
-    index: usize,
-    payload: Option<Value<'c, '_>>,
+    tag: Value<'c, '_>,
+    payloads: &[Value<'c, '_>],
 ) -> Operation<'c> {
     unsafe {
-        let raw_payload = match payload {
-            Some(v) => v.to_raw(),
-            None => MlirValue { ptr: std::ptr::null_mut() },
-        };
         let op = sumMakeOpCreate(
             loc.to_raw(),
             result_ty.to_raw(),
-            index as i64,
-            raw_payload,
+            tag.to_raw(),
+            payloads.as_ptr() as *const _,
+            payloads.len() as isize,
         );
         Operation::from_raw(op)
     }

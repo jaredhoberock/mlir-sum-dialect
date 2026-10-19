@@ -5,13 +5,15 @@
 func.func @make_read(%a: i64) {
   // expected-note @+1 {{payload source}}
   %v = arith.addi %a, %a : i64
-  %s = sum.make 0 %v : !sum.sum<(i64, none)>
+  %s_tag = arith.constant 0 : index
+  %s = sum.make %s_tag (%v : i64) : !sum.sum<(i64, none)>
   %p = sum.get %s, 0 : !sum.sum<(i64, none)> -> i64
   // expected-remark @+1 {{1 payload sources}}
   "test.payload_sources"(%p) : (i64) -> ()
   // expected-note @+1 {{payload source}}
   %w = arith.muli %a, %a : i64
-  %t = sum.make 0 %w : !sum.sum<(i64, none)>
+  %t_tag = arith.constant 0 : index
+  %t = sum.make %t_tag (%w : i64) : !sum.sum<(i64, none)>
   sum.match %t : !sum.sum<(i64, none)>
   case 0 (%q: i64) {
     // expected-remark @+1 {{1 payload sources}}
@@ -28,10 +30,39 @@ func.func @make_read(%a: i64) {
 
 // A make of another variant carries no payload of the variant read.
 func.func @other_variant(%v: i64, %w: i32) {
-  %s = sum.make 1 %w : !sum.sum<(i64, i32)>
+  %s_tag = arith.constant 1 : index
+  %s_absent = ub.poison : i64
+  %s = sum.make %s_tag (%s_absent, %w : i64, i32) : !sum.sum<(i64, i32)>
   %p = sum.get %s, 0 : !sum.sum<(i64, i32)> -> i64
   // expected-remark @+1 {{0 payload sources}}
   "test.payload_sources"(%p) : (i64) -> ()
+  return
+}
+
+// -----
+
+// A make whose tag is not a constant gives its payload operand of the variant
+// read, which is the payload wherever the make holds that variant; a poison
+// operand gives nothing. A make whose constant tag names another variant gives
+// nothing, whatever stands at the variant read.
+func.func @make_of_a_dynamic_tag(%t: index, %v: i64, %w: i32) {
+  // expected-note @+1 {{payload source}}
+  %x = arith.addi %v, %v : i64
+  %s = sum.make %t (%x, %w : i64, i32) : !sum.sum<(i64, i32)>
+  %p = sum.get %s, 0 : !sum.sum<(i64, i32)> -> i64
+  // expected-remark @+1 {{1 payload sources}}
+  "test.payload_sources"(%p) : (i64) -> ()
+  %absent = ub.poison : i64
+  %u = sum.make %t (%absent, %w : i64, i32) : !sum.sum<(i64, i32)>
+  %q = sum.get %u, 0 : !sum.sum<(i64, i32)> -> i64
+  // expected-remark @+1 {{0 payload sources}}
+  "test.payload_sources"(%q) : (i64) -> ()
+  %one = arith.constant 1 : index
+  %y = arith.muli %v, %v : i64
+  %o = sum.make %one (%y, %w : i64, i32) : !sum.sum<(i64, i32)>
+  %r = sum.get %o, 0 : !sum.sum<(i64, i32)> -> i64
+  // expected-remark @+1 {{0 payload sources}}
+  "test.payload_sources"(%r) : (i64) -> ()
   return
 }
 
@@ -43,10 +74,13 @@ func.func @branch_of_makes(%c: i1, %a: i64, %b: i64) {
   %s = scf.if %c -> !sum.sum<(i64, none)> {
     // expected-note @+1 {{payload source}}
     %x = arith.addi %a, %b : i64
-    %m = sum.make 0 %x : !sum.sum<(i64, none)>
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !sum.sum<(i64, none)>
     scf.yield %m : !sum.sum<(i64, none)>
   } else {
-    %n = sum.make 1 : !sum.sum<(i64, none)>
+    %n_tag = arith.constant 1 : index
+    %n_absent = ub.poison : i64
+    %n = sum.make %n_tag (%n_absent : i64) : !sum.sum<(i64, none)>
     scf.yield %n : !sum.sum<(i64, none)>
   }
   %t = scf.if %c -> !sum.sum<(i64, none)> {
@@ -82,12 +116,14 @@ func.func @two_makes(%c: i1, %a: i64, %b: i64) {
   %s = scf.if %c -> !sum.sum<(i64, none)> {
     // expected-note @+1 {{payload source}}
     %x = arith.addi %a, %b : i64
-    %m = sum.make 0 %x : !sum.sum<(i64, none)>
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !sum.sum<(i64, none)>
     scf.yield %m : !sum.sum<(i64, none)>
   } else {
     // expected-note @+1 {{payload source}}
     %y = arith.muli %a, %b : i64
-    %m = sum.make 0 %y : !sum.sum<(i64, none)>
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%y : i64) : !sum.sum<(i64, none)>
     scf.yield %m : !sum.sum<(i64, none)>
   }
   %p = sum.get %s, 0 : !sum.sum<(i64, none)> -> i64
@@ -105,11 +141,14 @@ func.func @lowered_spelling(%i: index, %a: i64) {
   case 0 {
     // expected-note @+1 {{payload source}}
     %x = arith.addi %a, %a : i64
-    %m = sum.make 0 %x : !sum.sum<(i64, none)>
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !sum.sum<(i64, none)>
     scf.yield %m : !sum.sum<(i64, none)>
   }
   default {
-    %n = sum.make 1 : !sum.sum<(i64, none)>
+    %n_tag = arith.constant 1 : index
+    %n_absent = ub.poison : i64
+    %n = sum.make %n_tag (%n_absent : i64) : !sum.sum<(i64, none)>
     scf.yield %n : !sum.sum<(i64, none)>
   }
   %tag = sum.tag %s : !sum.sum<(i64, none)>
@@ -134,11 +173,14 @@ func.func @match_of_sums(%o: !sum.sum<(i64, i32)>, %a: i64) {
   %s = sum.match %o : !sum.sum<(i64, i32)> -> !sum.sum<(i64, none)>
   // expected-note @+1 {{payload source}}
   case 0 (%x: i64) {
-    %m = sum.make 0 %x : !sum.sum<(i64, none)>
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !sum.sum<(i64, none)>
     yield %m : !sum.sum<(i64, none)>
   }
   case 1 (%y: i32) {
-    %n = sum.make 1 : !sum.sum<(i64, none)>
+    %n_tag = arith.constant 1 : index
+    %n_absent = ub.poison : i64
+    %n = sum.make %n_tag (%n_absent : i64) : !sum.sum<(i64, none)>
     yield %n : !sum.sum<(i64, none)>
   }
   %p = sum.get %s, 0 : !sum.sum<(i64, none)> -> i64
@@ -146,8 +188,10 @@ func.func @match_of_sums(%o: !sum.sum<(i64, i32)>, %a: i64) {
   "test.payload_sources"(%p) : (i64) -> ()
   // expected-note @+1 {{payload source}}
   %b = arith.addi %a, %a : i64
-  %inner = sum.make 0 %b : !sum.sum<(i64, none)>
-  %outer = sum.make 0 %inner : !sum.sum<(!sum.sum<(i64, none)>, none)>
+  %inner_tag = arith.constant 0 : index
+  %inner = sum.make %inner_tag (%b : i64) : !sum.sum<(i64, none)>
+  %outer_tag = arith.constant 0 : index
+  %outer = sum.make %outer_tag (%inner : !sum.sum<(i64, none)>) : !sum.sum<(!sum.sum<(i64, none)>, none)>
   %q = sum.get %outer, 0 : !sum.sum<(!sum.sum<(i64, none)>, none)> -> !sum.sum<(i64, none)>
   %r = sum.get %q, 0 : !sum.sum<(i64, none)> -> i64
   // expected-remark @+1 {{1 payload sources}}

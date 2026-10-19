@@ -32,16 +32,19 @@ std::optional<RebuiltSum> RebuiltSum::match(Value value) {
   auto type = dyn_cast<SumTypeInterface>(value.getType());
   if (!result || !type)
     return std::nullopt;
-  if (isa<AssembleOp>(result.getOwner()))
-    return RebuiltSum(result, {});
   unsigned position = result.getResultNumber();
 
   if (auto choice = dyn_cast<scf::IfOp>(result.getOwner())) {
     MakeOp then = makeYieldedAt(choice.getThenRegion(), position);
     MakeOp otherwise = makeYieldedAt(choice.getElseRegion(), position);
-    if (!then || !otherwise || then.getIndex() == otherwise.getIndex())
+    if (!then || !otherwise)
       return std::nullopt;
-    return RebuiltSum(result, {then, otherwise});
+    std::optional<size_t> thenVariant = then.getConstantVariant();
+    std::optional<size_t> otherwiseVariant = otherwise.getConstantVariant();
+    if (!thenVariant || !otherwiseVariant || *thenVariant == *otherwiseVariant)
+      return std::nullopt;
+    return RebuiltSum(result, {then, otherwise},
+                      {*thenVariant, *otherwiseVariant});
   }
 
   auto select = dyn_cast<scf::IndexSwitchOp>(result.getOwner());
@@ -54,13 +57,15 @@ std::optional<RebuiltSum> RebuiltSum::match(Value value) {
     if (caseValue != static_cast<int64_t>(variant))
       return std::nullopt;
   llvm::SmallVector<MakeOp> makes;
+  llvm::SmallVector<size_t> made;
   for (size_t variant = 0; variant != variants; ++variant) {
     MakeOp make = makeYieldedAt(switchArm(select, variant, variants), position);
-    if (!make || make.getIndex().getZExtValue() != variant)
+    if (!make || make.getConstantVariant() != variant)
       return std::nullopt;
     makes.push_back(make);
+    made.push_back(variant);
   }
-  return RebuiltSum(result, std::move(makes));
+  return RebuiltSum(result, std::move(makes), std::move(made));
 }
 
 Region &RebuiltSum::getArm(size_t arm) {
@@ -70,12 +75,10 @@ Region &RebuiltSum::getArm(size_t arm) {
 }
 
 Value RebuiltSum::getDominatingPayload(size_t variant) {
-  if (auto assembled = dyn_cast<AssembleOp>(owner))
-    return assembled.getPayloadOf(variant);
   for (size_t arm = 0, e = getNumArms(); arm != e; ++arm) {
-    if (makes[arm].getIndex().getZExtValue() != variant)
+    if (variants[arm] != variant)
       continue;
-    Value payload = makes[arm].getPayload();
+    Value payload = makes[arm].getPayloadOf(variant);
     if (!payload || getArm(arm).isAncestor(payload.getParentRegion()))
       return {};
     return payload;
@@ -85,16 +88,11 @@ Value RebuiltSum::getDominatingPayload(size_t variant) {
 
 Value RebuiltSum::buildHolds(OpBuilder &builder, Location loc,
                              size_t variant) {
-  if (auto assembled = dyn_cast<AssembleOp>(owner)) {
-    Value expected = arith::ConstantIndexOp::create(builder, loc, variant);
-    return arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
-                                 assembled.getTag(), expected);
-  }
   if (auto choice = dyn_cast<scf::IfOp>(owner)) {
     Value condition = choice.getCondition();
-    if (makes[0].getIndex().getZExtValue() == variant)
+    if (variants[0] == variant)
       return condition;
-    if (makes[1].getIndex().getZExtValue() == variant) {
+    if (variants[1] == variant) {
       Value always = arith::ConstantIntOp::create(builder, loc, 1, 1);
       return arith::XOrIOp::create(builder, loc, condition, always);
     }
@@ -110,13 +108,9 @@ Value RebuiltSum::buildHolds(OpBuilder &builder, Location loc,
 }
 
 Value RebuiltSum::buildTag(OpBuilder &builder, Location loc) {
-  if (auto assembled = dyn_cast<AssembleOp>(owner))
-    return assembled.getTag();
   if (auto choice = dyn_cast<scf::IfOp>(owner)) {
-    Value then = arith::ConstantIndexOp::create(
-        builder, loc, makes[0].getIndex().getZExtValue());
-    Value otherwise = arith::ConstantIndexOp::create(
-        builder, loc, makes[1].getIndex().getZExtValue());
+    Value then = arith::ConstantIndexOp::create(builder, loc, variants[0]);
+    Value otherwise = arith::ConstantIndexOp::create(builder, loc, variants[1]);
     return arith::SelectOp::create(builder, loc, choice.getCondition(), then,
                                    otherwise);
   }
@@ -140,7 +134,7 @@ static Region &readerArm(Operation *reader, uint64_t variant) {
 }
 
 LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
-  if (isa<AssembleOp>(owner) || reader->getBlock() != owner->getBlock() ||
+  if (reader->getBlock() != owner->getBlock() ||
       !owner->isBeforeInBlock(reader))
     return failure();
   // The reader's effects move ahead of every operation it crosses, so each
@@ -168,19 +162,19 @@ LogicalResult RebuiltSum::sink(Operation *reader, RewriterBase &rewriter) {
   // reach keeps the reader where it is.
   llvm::SmallPtrSet<Region *, 4> reached;
   for (size_t arm = 0, e = getNumArms(); arm != e; ++arm)
-    if (!reached.insert(&readerArm(reader, makes[arm].getIndex().getZExtValue()))
-             .second)
+    if (!reached.insert(&readerArm(reader, variants[arm])).second)
       return failure();
 
   // Each arm runs the reader's arm of its variant, and its yield carries that
   // arm's results after its own.
   ValueRange added =
       grow(rewriter, reader->getResultTypes(), [&](size_t arm) {
-        Region &from = readerArm(reader, makes[arm].getIndex().getZExtValue());
+        Region &from = readerArm(reader, variants[arm]);
         IRMapping mapping;
         mapping.map(Value(sum), makes[arm].getResult());
         if (from.getNumArguments() != 0)
-          mapping.map(from.getArgument(0), makes[arm].getPayload());
+          mapping.map(from.getArgument(0),
+                      makes[arm].getPayloadOf(variants[arm]));
         for (Operation &op : from.front().without_terminator())
           rewriter.clone(op, mapping);
         return llvm::map_to_vector(

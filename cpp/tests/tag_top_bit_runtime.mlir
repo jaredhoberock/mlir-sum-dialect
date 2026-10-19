@@ -16,7 +16,8 @@
 module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu", chip = "">} {
   func.func @main() {
     %seven = arith.constant 7 : i64
-    %s = sum.make 128 %seven : !s130
+    %s_tag = arith.constant 128 : index
+    %s = sum.make %s_tag (%seven : i64) : !s130
     %tag = sum.tag %s : !s130
     %tag64 = arith.index_cast %tag : index to i64
     func.call @printI64(%tag64) : (i64) -> ()

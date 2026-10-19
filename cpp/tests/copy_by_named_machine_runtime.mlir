@@ -19,8 +19,10 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
     %second = arith.constant 1 : index
     %one = arith.constant 1 : i64
     %zero = arith.constant 0 : i64
-    %v = sum.make 0 %one : !s
-    %z = sum.make 0 %zero : !s
+    %v_tag = arith.constant 0 : index
+    %v = sum.make %v_tag (%one : i64) : !s
+    %z_tag = arith.constant 0 : index
+    %z = sum.make %z_tag (%zero : i64) : !s
     %src = memref.alloca() : memref<2x!s>
     %dst = memref.alloca() : memref<2x!s>
     memref.store %v, %src[%first] : memref<2x!s>

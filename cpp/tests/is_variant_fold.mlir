@@ -5,7 +5,8 @@
 // CHECK: %[[TRUE:.*]] = arith.constant true
 // CHECK: return %[[TRUE]]
 func.func @is_variant_make_match(%val: i64) -> i1 {
-  %x = sum.make 0 %val : !sum.sum<(i64, none)>
+  %x_tag = arith.constant 0 : index
+  %x = sum.make %x_tag (%val : i64) : !sum.sum<(i64, none)>
   %r = sum.is_variant %x, 0 : !sum.sum<(i64, none)>
   return %r : i1
 }
@@ -15,7 +16,8 @@ func.func @is_variant_make_match(%val: i64) -> i1 {
 // CHECK: %[[FALSE:.*]] = arith.constant false
 // CHECK: return %[[FALSE]]
 func.func @is_variant_make_mismatch(%val: i64) -> i1 {
-  %x = sum.make 0 %val : !sum.sum<(i64, none)>
+  %x_tag = arith.constant 0 : index
+  %x = sum.make %x_tag (%val : i64) : !sum.sum<(i64, none)>
   %r = sum.is_variant %x, 1 : !sum.sum<(i64, none)>
   return %r : i1
 }
@@ -25,7 +27,9 @@ func.func @is_variant_make_mismatch(%val: i64) -> i1 {
 // CHECK: %[[TRUE:.*]] = arith.constant true
 // CHECK: return %[[TRUE]]
 func.func @is_variant_make_nullary() -> i1 {
-  %x = sum.make 1 : !sum.sum<(i64, none)>
+  %x_tag = arith.constant 1 : index
+  %x_absent = ub.poison : i64
+  %x = sum.make %x_tag (%x_absent : i64) : !sum.sum<(i64, none)>
   %r = sum.is_variant %x, 1 : !sum.sum<(i64, none)>
   return %r : i1
 }

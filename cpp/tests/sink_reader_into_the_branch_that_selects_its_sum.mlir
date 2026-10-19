@@ -28,10 +28,13 @@
 func.func @match_of_some_or_none(%c: i1, %x: i64) -> i64 {
   %s = scf.if %c -> !O {
     %p = arith.muli %x, %x : i64
-    %m = sum.make 0 %p : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%p : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   %r = sum.match %s : !O -> i64
@@ -58,10 +61,13 @@ func.func @match_of_some_or_none(%c: i1, %x: i64) -> i64 {
 func.func @switch_on_the_tag_of_some_or_none(%c: i1, %x: i64) -> i64 {
   %s = scf.if %c -> !O {
     %p = arith.muli %x, %x : i64
-    %m = sum.make 0 %p : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%p : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   %t = sum.tag %s : !O
@@ -99,16 +105,23 @@ func.func @match_of_a_three_way_switch(%tag: index, %x: i64, %y: f32) -> i64 {
   %s = scf.index_switch %tag -> !T
   case 0 {
     %p = arith.addi %x, %x : i64
-    %m = sum.make 0 %p : !T
+    %m_tag = arith.constant 0 : index
+    %m_absent = ub.poison : f32
+    %m = sum.make %m_tag (%p, %m_absent : i64, f32) : !T
     scf.yield %m : !T
   }
   case 1 {
-    %m = sum.make 1 : !T
+    %m_tag = arith.constant 1 : index
+    %m_absent0 = ub.poison : i64
+    %m_absent2 = ub.poison : f32
+    %m = sum.make %m_tag (%m_absent0, %m_absent2 : i64, f32) : !T
     scf.yield %m : !T
   }
   default {
     %f = arith.addf %y, %y : f32
-    %m = sum.make 2 %f : !T
+    %m_tag = arith.constant 2 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent, %f : i64, f32) : !T
     scf.yield %m : !T
   }
   %r = sum.match %s : !T -> i64
@@ -134,10 +147,14 @@ func.func @match_of_a_three_way_switch(%tag: index, %x: i64, %y: f32) -> i64 {
 // CHECK: return
 func.func @match_with_a_case_no_arm_reaches(%c: i1, %x: i64, %y: f32) -> i64 {
   %s = scf.if %c -> !T {
-    %m = sum.make 0 %x : !T
+    %m_tag = arith.constant 0 : index
+    %m_absent = ub.poison : f32
+    %m = sum.make %m_tag (%x, %m_absent : i64, f32) : !T
     scf.yield %m : !T
   } else {
-    %m = sum.make 2 %y : !T
+    %m_tag = arith.constant 2 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent, %y : i64, f32) : !T
     scf.yield %m : !T
   }
   %r = sum.match %s : !T -> i64
@@ -161,10 +178,10 @@ func.func @match_with_a_case_no_arm_reaches(%c: i1, %x: i64, %y: f32) -> i64 {
 // CHECK-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
 // CHECK: %[[R:.*]]:2 = scf.if %[[C]] -> (!sum.sum<(i64, none)>, i64) {
 // CHECK:   %[[P:.*]] = arith.muli %[[X]], %[[X]]
-// CHECK:   %[[M:.*]] = sum.make 0 %[[P]]
+// CHECK:   %[[M:.*]] = sum.make %c0 (%[[P]] : i64)
 // CHECK:   scf.yield %[[M]], %[[P]]
 // CHECK: } else {
-// CHECK:   %[[N:.*]] = sum.make 1
+// CHECK:   %[[N:.*]] = sum.make %c1
 // CHECK:   scf.yield %[[N]], %c0_i64
 // CHECK: }
 // CHECK-NOT: sum.match
@@ -172,10 +189,13 @@ func.func @match_with_a_case_no_arm_reaches(%c: i1, %x: i64, %y: f32) -> i64 {
 func.func @match_of_a_sum_read_again(%c: i1, %x: i64) -> (i64, !O) {
   %s = scf.if %c -> !O {
     %p = arith.muli %x, %x : i64
-    %m = sum.make 0 %p : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%p : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   %r = sum.match %s : !O -> i64
@@ -198,10 +218,13 @@ func.func @match_of_a_sum_read_again(%c: i1, %x: i64) -> (i64, !O) {
 func.func @match_after_a_store(%c: i1, %x: i64, %buffer: memref<i64>) -> i64 {
   %s = scf.if %c -> !O {
     %p = arith.muli %x, %x : i64
-    %m = sum.make 0 %p : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%p : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   memref.store %x, %buffer[] : memref<i64>
@@ -226,15 +249,22 @@ func.func @match_after_a_store(%c: i1, %x: i64, %buffer: memref<i64>) -> i64 {
 func.func @switch_whose_default_two_arms_reach(%tag: index, %x: i64, %y: f32) -> i64 {
   %s = scf.index_switch %tag -> !T
   case 0 {
-    %m = sum.make 0 %x : !T
+    %m_tag = arith.constant 0 : index
+    %m_absent = ub.poison : f32
+    %m = sum.make %m_tag (%x, %m_absent : i64, f32) : !T
     scf.yield %m : !T
   }
   case 1 {
-    %m = sum.make 1 : !T
+    %m_tag = arith.constant 1 : index
+    %m_absent0 = ub.poison : i64
+    %m_absent2 = ub.poison : f32
+    %m = sum.make %m_tag (%m_absent0, %m_absent2 : i64, f32) : !T
     scf.yield %m : !T
   }
   default {
-    %m = sum.make 2 %y : !T
+    %m_tag = arith.constant 2 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent, %y : i64, f32) : !T
     scf.yield %m : !T
   }
   %t = sum.tag %s : !T
@@ -263,10 +293,13 @@ func.func @match_after_a_loop(%c: i1, %again: i1, %x: i64) -> i64 {
   %one = arith.constant 1 : i64
   %s = scf.if %c -> !O {
     %p = arith.addi %x, %one : i64
-    %m = sum.make 0 %p : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%p : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   %loop = scf.while (%v = %x) : (i64) -> i64 {
@@ -307,10 +340,13 @@ func.func @switch_on_the_tag_after_a_loop(%c: i1, %again: i1, %x: i64) -> i64 {
   %one = arith.constant 1 : i64
   %s = scf.if %c -> !O {
     %p = arith.addi %x, %one : i64
-    %m = sum.make 0 %p : !O
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%p : i64) : !O
     scf.yield %m : !O
   } else {
-    %m = sum.make 1 : !O
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !O
     scf.yield %m : !O
   }
   %loop = scf.while (%v = %x) : (i64) -> i64 {

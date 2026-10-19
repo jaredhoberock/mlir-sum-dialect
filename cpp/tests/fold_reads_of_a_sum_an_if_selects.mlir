@@ -1,7 +1,7 @@
 // RUN: mlir-opt --canonicalize %s | FileCheck %s
 
-// A sum an scf.if selects -- each of its two arms yielding the make of a
-// different variant -- holds the then arm's variant where the condition holds
+// A sum an scf.if selects -- each of its two arms yielding a make whose tag is
+// a constant naming a different variant -- holds the then arm's variant where the condition holds
 // and the else arm's where it does not. A read of it folds to what selects the
 // arm: is_variant is the condition, its negation, or false; the tag chooses
 // between the two variants on the condition; and get reads the payload of the
@@ -29,10 +29,13 @@
 // CHECK: return %[[TAG]], %[[C]], %[[ABSENT]], %[[X]]
 func.func @reads_of_a_sum_an_if_selects(%c: i1, %x: i64) -> (index, i1, i1, i64) {
   %s = scf.if %c -> !I {
-    %m = sum.make 0 %x : !I
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !I
     scf.yield %m : !I
   } else {
-    %m = sum.make 1 : !I
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !I
     scf.yield %m : !I
   }
   %t = sum.tag %s : !I
@@ -53,10 +56,14 @@ func.func @reads_of_a_sum_an_if_selects(%c: i1, %x: i64) -> (index, i1, i1, i64)
 // CHECK: return %[[TAG]], %[[FALSE]], %[[Y]], %[[X]]
 func.func @reads_of_a_variant_neither_arm_makes(%c: i1, %x: i64, %y: f32) -> (index, i1, f32, i64) {
   %s = scf.if %c -> !S {
-    %m = sum.make 2 %y : !S
+    %m_tag = arith.constant 2 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent, %y : i64, f32) : !S
     scf.yield %m : !S
   } else {
-    %m = sum.make 0 %x : !S
+    %m_tag = arith.constant 0 : index
+    %m_absent = ub.poison : f32
+    %m = sum.make %m_tag (%x, %m_absent : i64, f32) : !S
     scf.yield %m : !S
   }
   %t = sum.tag %s : !S
@@ -72,10 +79,13 @@ func.func @reads_of_a_variant_neither_arm_makes(%c: i1, %x: i64, %y: f32) -> (in
 // CHECK: return %{{.*}}, %[[C]], %[[X]]
 func.func @reads_of_a_sum_beside_other_results(%c: i1, %x: i64, %y: i64) -> (i64, i1, i64) {
   %o, %s = scf.if %c -> (i64, !I) {
-    %m = sum.make 0 %x : !I
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !I
     scf.yield %y, %m : i64, !I
   } else {
-    %m = sum.make 1 : !I
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : i64
+    %m = sum.make %m_tag (%m_absent : i64) : !I
     scf.yield %x, %m : i64, !I
   }
   %a = sum.is_variant %s, 0 : !I
@@ -85,19 +95,24 @@ func.func @reads_of_a_sum_beside_other_results(%c: i1, %x: i64, %y: i64) -> (i64
 
 // CHECK-LABEL: func.func @read_of_a_payload_built_in_its_arm
 // CHECK-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
+// CHECK: %[[FIRST:.*]] = arith.constant 0 : index
 // CHECK: %[[S:.*]] = scf.if %[[C]]
-// CHECK-NEXT: %[[INNER:.*]] = sum.make 0 %[[X]]
-// CHECK-NEXT: %[[OUTER:.*]] = sum.make 0 %[[INNER]]
+// CHECK-NEXT: %[[INNER:.*]] = sum.make %[[FIRST]] (%[[X]] : i64)
+// CHECK-NEXT: %[[OUTER:.*]] = sum.make %[[FIRST]] (%[[INNER]] :
 // CHECK-NEXT: scf.yield %[[OUTER]]
 // CHECK: %[[P:.*]] = sum.get %[[S]], 0
 // CHECK-NEXT: return %[[C]], %[[P]]
 func.func @read_of_a_payload_built_in_its_arm(%c: i1, %x: i64) -> (i1, !I) {
   %s = scf.if %c -> !N {
-    %inner = sum.make 0 %x : !I
-    %m = sum.make 0 %inner : !N
+    %inner_tag = arith.constant 0 : index
+    %inner = sum.make %inner_tag (%x : i64) : !I
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%inner : !sum.sum<(i64, none)>) : !N
     scf.yield %m : !N
   } else {
-    %m = sum.make 1 : !N
+    %m_tag = arith.constant 1 : index
+    %m_absent = ub.poison : !sum.sum<(i64, none)>
+    %m = sum.make %m_tag (%m_absent : !sum.sum<(i64, none)>) : !N
     scf.yield %m : !N
   }
   %a = sum.is_variant %s, 0 : !N
@@ -113,10 +128,12 @@ func.func @read_of_a_payload_built_in_its_arm(%c: i1, %x: i64) -> (i1, !I) {
 // CHECK: return
 func.func @reads_of_an_if_whose_arms_make_one_variant(%c: i1, %x: i64, %y: i64) -> (index, i1, i64) {
   %s = scf.if %c -> !I {
-    %m = sum.make 0 %x : !I
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%x : i64) : !I
     scf.yield %m : !I
   } else {
-    %m = sum.make 0 %y : !I
+    %m_tag = arith.constant 0 : index
+    %m = sum.make %m_tag (%y : i64) : !I
     scf.yield %m : !I
   }
   %t = sum.tag %s : !I

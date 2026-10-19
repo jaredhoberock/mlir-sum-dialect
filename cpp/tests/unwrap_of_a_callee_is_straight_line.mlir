@@ -26,10 +26,13 @@ func.func private @packed(%ok: i1, %m: memref<?xf32>, %n: index) -> !Opt {
   %r = scf.if %ok -> !Opt {
     %v = memref.reinterpret_cast %m to offset: [0], sizes: [%n, 8], strides: [8, 1] : memref<?xf32> to memref<?x8xf32, strided<[8, 1]>>
     %w = memref.cast %v : memref<?x8xf32, strided<[8, 1]>> to !View
-    %s = sum.make 0 %w : !Opt
+    %s_tag = arith.constant 0 : index
+    %s = sum.make %s_tag (%w : !View) : !Opt
     scf.yield %s : !Opt
   } else {
-    %s = sum.make 1 : !Opt
+    %s_tag = arith.constant 1 : index
+    %s_absent = ub.poison : !View
+    %s = sum.make %s_tag (%s_absent : !View) : !Opt
     scf.yield %s : !Opt
   }
   return %r : !Opt

@@ -2,7 +2,7 @@
 
 // A function unwraps four nested Options, each read checked by an assertion.
 // The leaf conversion takes the argument apart into its five leaves and
-// rebuilds it as nested assembles, every read of which is a projection: each
+// rebuilds it as nested makes, every read of which is a projection: each
 // check folds to a comparison of one tag leaf, and the innermost payload is the
 // last leaf itself. The work is one operation per leaf, however deeply the sums
 // nest, and no branch is built.

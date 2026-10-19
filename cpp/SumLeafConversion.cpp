@@ -76,10 +76,9 @@ void populateSumLeafTypes(TypeConverter &converter) {
       });
 
   // The leaves are the tag and then each payload's leaves. The sum is one
-  // assemble of the tag and each variant's payload rebuilt from its slice of
-  // the leaves, so every read of it is a projection that folds to the leaf it
-  // reads (RebuiltSum), however deeply sums nest, and no read branches on a
-  // tag.
+  // make of the tag and each variant's payload rebuilt from its slice of the
+  // leaves, so every read of it is a projection that folds to the leaf it
+  // reads, however deeply sums nest, and no read branches on a tag.
   converter.addSourceMaterialization(
       [&converter](OpBuilder &builder, SumType type, ValueRange leaves,
                    Location loc) -> Value {
@@ -101,7 +100,7 @@ void populateSumLeafTypes(TypeConverter &converter) {
             return Value();
           llvm::append_range(rebuilt, *payload);
         }
-        return AssembleOp::create(builder, loc, type, leaves.front(), rebuilt);
+        return MakeOp::create(builder, loc, type, leaves.front(), rebuilt);
       });
 
   // Each payload leaf is the read of its payload where the sum holds the

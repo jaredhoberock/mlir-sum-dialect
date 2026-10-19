@@ -15,6 +15,8 @@ func.func @caller(%arg0: i64) -> !sum.sum<(i64, tuple<>)> {
 }
 
 func.func private @callee(%arg0: i64) -> !sum.sum<(i64, tuple<>)> {
-  %c = sum.make 0 %arg0 : !sum.sum<(i64, tuple<>)>
+  %c_tag = arith.constant 0 : index
+  %c_absent = ub.poison : tuple<>
+  %c = sum.make %c_tag (%arg0, %c_absent : i64, tuple<>) : !sum.sum<(i64, tuple<>)>
   return %c : !sum.sum<(i64, tuple<>)>
 }

@@ -16,11 +16,14 @@ module {
     case 0 {
       %m = memref.alloc() : memref<1xi64>
       memref.store %c42, %m[%c0] : memref<1xi64>
-      %v = sum.make 0 %m : !S
+      %v_tag = arith.constant 0 : index
+      %v = sum.make %v_tag (%m : memref<1xi64>) : !S
       scf.yield %v : !S
     }
     default {
-      %v = sum.make 1 : !S
+      %v_tag = arith.constant 1 : index
+      %v_absent = ub.poison : memref<1xi64>
+      %v = sum.make %v_tag (%v_absent : memref<1xi64>) : !S
       scf.yield %v : !S
     }
     %m = sum.get %s, 0 : !S -> memref<1xi64>

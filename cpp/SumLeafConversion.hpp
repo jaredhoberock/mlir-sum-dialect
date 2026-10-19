@@ -9,7 +9,7 @@ namespace sum {
 /// Adds the sum type to the leaf conversion `converter`: a sum converts to an
 /// `index` holding its tag followed by the leaves of every variant that carries
 /// a payload, in variant order. Its source materialization rebuilds the sum as
-/// one `sum.assemble` of the tag and every variant's payload, each rebuilt from
+/// one `sum.make` of the tag and every variant's payload, each rebuilt from
 /// its leaves, so every read of the rebuilt sum folds to a leaf. Its target
 /// materialization reads the tag with `sum.tag`, and each payload leaf as the
 /// select, on `sum.is_variant`, of the leaf of the payload `sum.get` reads and

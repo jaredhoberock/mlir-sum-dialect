@@ -5,15 +5,15 @@
 
 // A sum crosses a call as its leaves, and the callee stores it whole, by an
 // operation the conversion knows nothing of. The sum is rebuilt there as one
-// sum.assemble of its tag and payload leaves, an operation that carries the sum
+// sum.make of its tag and payload leaves, an operation that carries the sum
 // and is no boundary, so the first run of the conversion leaves no boundary
-// carrying a sum and the second finds nothing to do. The assemble survives to
+// carrying a sum and the second finds nothing to do. The make survives to
 // the LLVM lowering, and the caller, loading the sum back, reads the payload
 // under the variant it holds: 42 where Some, 7 where None.
 
 // IR-LABEL: func.func private @store(
 // IR-SAME: %[[TAG:[^:]+]]: index, %[[PAYLOAD:[^:]+]]: i64, %[[M:[^:]+]]: memref<!sum.sum<(i64, none)>>)
-// IR-NEXT: %[[S:.*]] = sum.assemble %[[TAG]] (%[[PAYLOAD]] : i64) : !sum.sum<(i64, none)>
+// IR-NEXT: %[[S:.*]] = sum.make %[[TAG]] (%[[PAYLOAD]] : i64) : !sum.sum<(i64, none)>
 // IR-NEXT: memref.store %[[S]], %[[M]][]
 // IR-NOT: scf.index_switch
 // IR-LABEL: func.func @main(
@@ -46,12 +46,15 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
   func.func @main() {
     %c42 = arith.constant 42 : i64
     %m = memref.alloca() : memref<!S>
-    %some = sum.make 0 %c42 : !S
+    %some_tag = arith.constant 0 : index
+    %some = sum.make %some_tag (%c42 : i64) : !S
     func.call @store(%some, %m) : (!S, memref<!S>) -> ()
     %a = func.call @read(%m) : (memref<!S>) -> i64
     func.call @printI64(%a) : (i64) -> ()
     func.call @printNewline() : () -> ()
-    %none = sum.make 1 : !S
+    %none_tag = arith.constant 1 : index
+    %none_absent = ub.poison : i64
+    %none = sum.make %none_tag (%none_absent : i64) : !S
     func.call @store(%none, %m) : (!S, memref<!S>) -> ()
     %b = func.call @read(%m) : (memref<!S>) -> i64
     func.call @printI64(%b) : (i64) -> ()

@@ -23,6 +23,8 @@ func.func @match_nullary_lowering(%arg0: !sum.sum<(none, i64)>) -> i64 {
 // CHECK-NOT: builtin.unrealized_conversion_cast
 // CHECK: llvm.return
 func.func @make_nullary_lowering() -> !sum.sum<(none, i64)> {
-  %c = sum.make 0 : !sum.sum<(none, i64)>
+  %c_tag = arith.constant 0 : index
+  %c_absent = ub.poison : i64
+  %c = sum.make %c_tag (%c_absent : i64) : !sum.sum<(none, i64)>
   return %c : !sum.sum<(none, i64)>
 }

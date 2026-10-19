@@ -50,16 +50,14 @@ MlirOperation sumIsVariantOpCreate(MlirLocation loc, MlirValue input, int64_t in
   return wrap(op.getOperation());
 }
 
-MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, int64_t index, MlirValue payload) {
+MlirOperation sumMakeOpCreate(MlirLocation loc, MlirType resultTy, MlirValue tag,
+                              const MlirValue *payloads, intptr_t nPayloads) {
   OpBuilder builder(unwrap(loc)->getContext());
-  auto indexAttr = builder.getIndexAttr(index);
-  Value payloadVal = payload.ptr ? unwrap(payload) : Value();
-  auto op = MakeOp::create(builder, 
-    unwrap(loc),
-    unwrap(resultTy),
-    indexAttr,
-    payloadVal
-  );
+  SmallVector<Value> values;
+  for (intptr_t i = 0; i < nPayloads; ++i)
+    values.push_back(unwrap(payloads[i]));
+  auto op = MakeOp::create(builder, unwrap(loc), unwrap(resultTy), unwrap(tag),
+                           values);
   return wrap(op.getOperation());
 }
 

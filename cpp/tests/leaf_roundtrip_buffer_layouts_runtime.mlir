@@ -31,50 +31,65 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
 
   func.func private @f0(%held: i1, %m: memref<4xi64>) -> !S0 {
     %r = scf.if %held -> !S0 {
-      %s = sum.make 0 %m : !S0
+      %s_tag = arith.constant 0 : index
+      %s = sum.make %s_tag (%m : memref<4xi64>) : !S0
       scf.yield %s : !S0
     } else {
-      %s = sum.make 1 : !S0
+      %s_tag = arith.constant 1 : index
+      %s_absent = ub.poison : memref<4xi64>
+      %s = sum.make %s_tag (%s_absent : memref<4xi64>) : !S0
       scf.yield %s : !S0
     }
     return %r : !S0
   }
   func.func private @f1(%held: i1, %m: memref<?xi64, strided<[2], offset: 1>>) -> !S1 {
     %r = scf.if %held -> !S1 {
-      %s = sum.make 0 %m : !S1
+      %s_tag = arith.constant 0 : index
+      %s = sum.make %s_tag (%m : memref<?xi64, strided<[2], offset: 1>>) : !S1
       scf.yield %s : !S1
     } else {
-      %s = sum.make 1 : !S1
+      %s_tag = arith.constant 1 : index
+      %s_absent = ub.poison : memref<?xi64, strided<[2], offset: 1>>
+      %s = sum.make %s_tag (%s_absent : memref<?xi64, strided<[2], offset: 1>>) : !S1
       scf.yield %s : !S1
     }
     return %r : !S1
   }
   func.func private @f2(%held: i1, %m: memref<?xi64, strided<[2], offset: ?>>) -> !S2 {
     %r = scf.if %held -> !S2 {
-      %s = sum.make 0 %m : !S2
+      %s_tag = arith.constant 0 : index
+      %s = sum.make %s_tag (%m : memref<?xi64, strided<[2], offset: ?>>) : !S2
       scf.yield %s : !S2
     } else {
-      %s = sum.make 1 : !S2
+      %s_tag = arith.constant 1 : index
+      %s_absent = ub.poison : memref<?xi64, strided<[2], offset: ?>>
+      %s = sum.make %s_tag (%s_absent : memref<?xi64, strided<[2], offset: ?>>) : !S2
       scf.yield %s : !S2
     }
     return %r : !S2
   }
   func.func private @f3(%held: i1, %m: memref<i64>) -> !S3 {
     %r = scf.if %held -> !S3 {
-      %s = sum.make 0 %m : !S3
+      %s_tag = arith.constant 0 : index
+      %s = sum.make %s_tag (%m : memref<i64>) : !S3
       scf.yield %s : !S3
     } else {
-      %s = sum.make 1 : !S3
+      %s_tag = arith.constant 1 : index
+      %s_absent = ub.poison : memref<i64>
+      %s = sum.make %s_tag (%s_absent : memref<i64>) : !S3
       scf.yield %s : !S3
     }
     return %r : !S3
   }
   func.func private @f4(%held: i1, %m: memref<4xi64, strided<[-1], offset: 3>>) -> !S4 {
     %r = scf.if %held -> !S4 {
-      %s = sum.make 0 %m : !S4
+      %s_tag = arith.constant 0 : index
+      %s = sum.make %s_tag (%m : memref<4xi64, strided<[-1], offset: 3>>) : !S4
       scf.yield %s : !S4
     } else {
-      %s = sum.make 1 : !S4
+      %s_tag = arith.constant 1 : index
+      %s_absent = ub.poison : memref<4xi64, strided<[-1], offset: 3>>
+      %s = sum.make %s_tag (%s_absent : memref<4xi64, strided<[-1], offset: 3>>) : !S4
       scf.yield %s : !S4
     }
     return %r : !S4

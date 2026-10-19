@@ -48,13 +48,16 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
 
   func.func @taken() {
     %seven = arith.constant 7 : i64
-    %some = sum.make 0 %seven : !O
+    %some_tag = arith.constant 0 : index
+    %some = sum.make %some_tag (%seven : i64) : !O
     func.call @run(%some) : (!O) -> ()
     return
   }
 
   func.func @aborts() {
-    %none = sum.make 1 : !O
+    %none_tag = arith.constant 1 : index
+    %none_absent = ub.poison : i64
+    %none = sum.make %none_tag (%none_absent : i64) : !O
     func.call @run(%none) : (!O) -> ()
     return
   }

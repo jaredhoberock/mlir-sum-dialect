@@ -65,51 +65,17 @@ struct IsVariantOpLowering : OpConversionPattern<IsVariantOp> {
   }
 };
 
+/// A make lowers to a struct built over poison: the tag narrowed or widened to
+/// the tag field's width, and each payload operand in the field of its variant.
+/// A sum value defines its tag and the payload of the variant it holds, and
+/// nothing else: the fields of the variants the tag does not name hold values
+/// no read under `sum.get`'s precondition observes, poison where the make's
+/// operand is.
 struct MakeOpLowering : OpConversionPattern<MakeOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(MakeOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto resultTy = op.getResult().getType();
-
-    auto lowered = getLoweredSum(resultTy, *getTypeConverter());
-    if (failed(lowered))
-      return op.emitError() << "cannot lower sum type to LLVM: " << resultTy;
-    Type tagTy = lowered->getBody()[0];
-
-    // A sum value defines its tag and the payload of the variant it holds, and
-    // nothing else: the struct starts as poison, so the payload field of every
-    // other variant is poison, which no read under `sum.get`'s precondition
-    // observes. The tag is inserted over that base, so it is defined in every
-    // value.
-    Value sum = LLVM::PoisonOp::create(rewriter, loc, *lowered);
-    uint64_t index = op.getIndex().getZExtValue();
-    Value tag = LLVM::ConstantOp::create(rewriter, loc, tagTy,
-                                         rewriter.getIntegerAttr(tagTy, index));
-    sum = LLVM::InsertValueOp::create(rewriter, loc, sum, tag,
-                                      ArrayRef<int64_t>{0});
-
-    // a nullary variant has no payload; its empty field stays as built
-    if (Value payload = adaptor.getPayload())
-      sum = LLVM::InsertValueOp::create(rewriter, loc, sum, payload, index + 1);
-
-    rewriter.replaceOp(op, sum);
-    return success();
-  }
-};
-
-/// An assemble is the make of every variant at once: over a poison struct, the
-/// tag narrowed to the tag field's width, and each payload operand in the field
-/// of its variant. The fields of the variants the tag does not name hold values
-/// no read under `sum.get`'s precondition observes, as a make's poison fields
-/// do.
-struct AssembleOpLowering : OpConversionPattern<AssembleOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(AssembleOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto resultTy = cast<SumTypeInterface>(op.getResult().getType());
@@ -131,6 +97,7 @@ struct AssembleOpLowering : OpConversionPattern<AssembleOp> {
     Value sum = LLVM::PoisonOp::create(rewriter, loc, *lowered);
     sum = LLVM::InsertValueOp::create(rewriter, loc, sum, tag,
                                       ArrayRef<int64_t>{0});
+    // A nullary variant has no payload; its empty field stays as built.
     ValueRange payloads = adaptor.getPayloads();
     for (size_t variant = 0, e = resultTy.getNumVariants(); variant != e;
          ++variant) {
@@ -210,7 +177,6 @@ void populateSumToLLVMConversionPatterns(LLVMTypeConverter& typeConverter,
   });
 
   patterns.add<
-    AssembleOpLowering,
     GetOpLowering,
     IsVariantOpLowering,
     MakeOpLowering,

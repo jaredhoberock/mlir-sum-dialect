@@ -50,42 +50,6 @@ def GetOp : SumDialectOp<"get", [Pure]> {
   ];
 }
 
-def AssembleOp : SumDialectOp<"assemble", [Pure]> {
-  let summary = "Construct a sum from its tag and the payload of every variant";
-  let description = [{
-    Creates a value of a sum type from its parts: `tag`, the index of the
-    variant the sum holds, and one payload operand per variant that carries a
-    payload, in variant order. The sum holds the variant `tag` names, with that
-    variant's payload operand as its payload; the payload operands of the other
-    variants are not part of the value, so any value of their type, poison
-    included, may stand there. A tag that names no variant makes the sum poison.
-    `sum.make k %p` is the assemble whose tag is the constant k.
-
-    Every read of an assembled sum is a projection by position: `sum.tag` is
-    `tag`, `sum.is_variant` of variant k compares `tag` with k, and `sum.get` of
-    variant k is the payload operand of variant k.
-
-    Example:
-
-        %s = sum.assemble %tag (%x, %y : i64, f32) : !sum.sum<(i64, none, f32)>
-        %n = sum.assemble %tag : !sum.sum<(none, none)>
-  }];
-
-  let arguments = (ins Index:$tag, Variadic<AnyType>:$payloads);
-  let results = (outs IsSumTypeInterface:$result);
-
-  let hasVerifier = 1;
-  let hasFolder = 1;
-  let hasCanonicalizer = 1;
-  let assemblyFormat = "$tag (` ` `(` $payloads^ `:` type($payloads) `)`)? attr-dict `:` qualified(type($result))";
-
-  let extraClassDeclaration = [{
-    /// The payload operand of variant `variant`, or null for a variant that
-    /// carries no payload.
-    Value getPayloadOf(size_t variant);
-  }];
-}
-
 def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
   let summary = "Check if a sum value is a specific variant";
   let description = [{
@@ -114,34 +78,51 @@ def IsVariantOp : SumDialectOp<"is_variant", [Pure]> {
 }
 
 def MakeOp : SumDialectOp<"make", [Pure]> {
-  let summary = "Construct a sum type variant";
+  let summary = "Construct a sum from its tag and the payload of every variant";
   let description = [{
-    Creates a value of a sum type by specifying which variant to construct
-    and providing the payload value (if any). For nullary variants (variant
-    type is NoneType), no payload is provided.
+    Creates a value of a sum type from its parts: `tag`, the index of the
+    variant the sum holds, and one payload operand per variant that carries a
+    payload, in variant order. The sum holds the variant `tag` names, with that
+    variant's payload operand as its payload; the payload operands of the other
+    variants are not part of the value, so any value of their type, poison
+    included, may stand there. A tag that names no variant makes the sum
+    poison. A make whose tag is a constant k builds variant k.
+
+    Every read of a made sum is a projection by position: `sum.tag` is `tag`,
+    `sum.is_variant` of variant k compares `tag` with k, and `sum.get` of
+    variant k is the payload operand of variant k.
 
     Example:
 
-        %x = sum.make 0 %val : !sum.sum<(i64, none)>
-        %y = sum.make 1 : !sum.sum<(i64, none)>
+        %c0 = arith.constant 0 : index
+        %absent = ub.poison : f32
+        %x = sum.make %c0 (%val, %absent : i64, f32) : !sum.sum<(i64, none, f32)>
+        %n = sum.make %tag : !sum.sum<(none, none)>
   }];
 
-  let arguments = (ins
-    IndexAttr:$index,
-    Optional<AnyType>:$payload
-  );
-
+  let arguments = (ins Index:$tag, Variadic<AnyType>:$payloads);
   let results = (outs IsSumTypeInterface:$result);
 
-  let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+  let hasFolder = 1;
+  let assemblyFormat = "$tag (` ` `(` $payloads^ `:` type($payloads) `)`)? attr-dict `:` qualified(type($result))";
 
-  let builders = [
-    OpBuilder<(ins "Type":$resultType, "int64_t":$index), [{
-      build($_builder, $_state, resultType,
-            $_builder.getIndexAttr(index), /*payload=*/Value());
-    }]>
-  ];
+  let extraClassDeclaration = [{
+    /// The payload operand of variant `variant`, or null for a variant that
+    /// carries no payload.
+    Value getPayloadOf(size_t variant);
+
+    /// The variant the make builds when its tag is a constant that names one,
+    /// or none.
+    std::optional<size_t> getConstantVariant();
+
+    /// The make of variant `variant` of `type` holding `payload` (null for a
+    /// variant that carries none), built at `builder`'s insertion point: its
+    /// tag the index constant `variant`, and the payload operand of every
+    /// other variant that carries one a `ub.poison` of that payload's type.
+    static MakeOp createOfVariant(OpBuilder &builder, Location loc, Type type,
+                                  size_t variant, Value payload);
+  }];
 }
 
 def MatchOp : SumDialectOp<"match", [

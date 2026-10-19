@@ -18,7 +18,8 @@ module attributes {llvm.target = #llvm.target<triple = "x86_64-unknown-linux-gnu
     %p0 = llvm.insertvalue %true, %undef[0] : !llvm.struct<(i1, i64, i1)>
     %p1 = llvm.insertvalue %seven, %p0[1] : !llvm.struct<(i1, i64, i1)>
     %p2 = llvm.insertvalue %true, %p1[2] : !llvm.struct<(i1, i64, i1)>
-    %some = sum.make 0 %p2 : !sum.sum<(!llvm.struct<(i1, i64, i1)>, none)>
+    %some_tag = arith.constant 0 : index
+    %some = sum.make %some_tag (%p2 : !llvm.struct<(i1, i64, i1)>) : !sum.sum<(!llvm.struct<(i1, i64, i1)>, none)>
     sum.match %some : !sum.sum<(!llvm.struct<(i1, i64, i1)>, none)>
     case 0 (%p: !llvm.struct<(i1, i64, i1)>) {
       %a = llvm.extractvalue %p[0] : !llvm.struct<(i1, i64, i1)>

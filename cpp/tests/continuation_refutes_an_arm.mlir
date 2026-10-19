@@ -79,10 +79,13 @@ func.func @loop_in_the_arm(%n: index) -> i64 {
       %t = arith.muli %a, %three : i64
       scf.yield %t : i64
     }
-    %s = sum.make 0 %acc : !O
+    %s_tag = arith.constant 0 : index
+    %s = sum.make %s_tag (%acc : i64) : !O
     scf.yield %s : !O
   } else {
-    %s = sum.make 1 : !O
+    %s_tag = arith.constant 1 : index
+    %s_absent = ub.poison : i64
+    %s = sum.make %s_tag (%s_absent : i64) : !O
     scf.yield %s : !O
   }
   %t = sum.tag %o : !O

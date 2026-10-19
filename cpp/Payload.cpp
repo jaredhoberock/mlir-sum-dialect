@@ -31,8 +31,13 @@ static std::optional<std::pair<Value, unsigned>> payloadRead(Value value) {
 static LogicalResult collectPayloads(Value sum, unsigned index,
                                      llvm::SetVector<Value> &sources) {
   if (auto make = sum.getDefiningOp<MakeOp>()) {
-    if (make.getIndex().getZExtValue() == index && make.getPayload())
-      sources.insert(make.getPayload());
+    // A make whose constant tag names another variant carries no payload of
+    // variant `index`, and a poison payload operand is no value.
+    std::optional<size_t> variant = make.getConstantVariant();
+    Value payload = make.getPayloadOf(index);
+    if ((!variant || *variant == index) && payload &&
+        !payload.getDefiningOp<ub::PoisonOp>())
+      sources.insert(payload);
     return success();
   }
   if (sum.getDefiningOp<ub::PoisonOp>())
