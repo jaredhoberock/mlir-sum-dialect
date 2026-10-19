@@ -58,36 +58,28 @@ func.func @reads_of_a_make_of_a_dynamic_tag(%tag: index, %x: i64, %y: f32) -> (i
   return %t, %a, %b, %p, %q : index, i1, i1, i64, f32
 }
 
-// The payload taken apart as the leaf conversion takes one apart: the read
-// where the sum holds its variant, a stand-in elsewhere.
+// The payloads taken apart as the leaf conversion takes them apart: each the
+// read of the sum's own payload.
 // CHECK-LABEL: func.func @make_of_its_own_parts
-// CHECK-SAME: (%[[S:.*]]: !sum.sum<(memref<?xf32>, none)>, %[[STAND:.*]]: memref<?xf32>)
+// CHECK-SAME: (%[[S:.*]]: !sum.sum<(memref<?xf32>, none)>)
 // CHECK-NOT: sum.make
-// CHECK: return %[[S]], %[[S]]
-func.func @make_of_its_own_parts(%s: !B, %stand: !M) -> (!B, !B) {
+// CHECK: return %[[S]]
+func.func @make_of_its_own_parts(%s: !B) -> !B {
   %t = sum.tag %s : !B
   %p = sum.get %s, 0 : !B -> !M
   %read = sum.make %t (%p : !M) : !B
-  %holds = sum.is_variant %s, 0 : !B
-  %q = arith.select %holds, %p, %stand : !M
-  %chosen = sum.make %t (%q : !M) : !B
-  return %read, %chosen : !B, !B
+  return %read : !B
 }
 
-// The tag of one sum with the payload of another, or a payload chosen where
-// the sum holds another variant: neither is the sum.
+// The tag of one sum with the payload of another is not the sum.
 // CHECK-LABEL: func.func @make_of_other_parts
-// CHECK-COUNT-2: sum.make
+// CHECK: sum.make
 // CHECK: return
-func.func @make_of_other_parts(%s: !B, %r: !B, %stand: !M) -> (!B, !B) {
+func.func @make_of_other_parts(%s: !B, %r: !B) -> !B {
   %t = sum.tag %s : !B
   %p = sum.get %r, 0 : !B -> !M
   %mixed = sum.make %t (%p : !M) : !B
-  %elsewhere = sum.is_variant %s, 1 : !B
-  %own = sum.get %s, 0 : !B -> !M
-  %q = arith.select %elsewhere, %own, %stand : !M
-  %wrong = sum.make %t (%q : !M) : !B
-  return %mixed, %wrong : !B, !B
+  return %mixed : !B
 }
 
 // CHECK-LABEL: func.func @reads_of_a_rebuilt_sum

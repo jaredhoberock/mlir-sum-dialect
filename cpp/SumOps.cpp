@@ -187,11 +187,10 @@ LogicalResult MakeOp::verify() {
   return success();
 }
 
-/// A make of a sum's own tag and its own payloads is that sum: under the
-/// variant the sum holds, each payload operand is the sum's own payload -- its
-/// `sum.get`, or the select of that read where the sum holds the variant, the
-/// form the leaf conversion takes a payload apart in -- and the other
-/// variants' payloads are not part of the value.
+/// A make of a sum's own tag and its own payloads, each its `sum.get` (the
+/// form the leaf conversion takes a payload apart in), is that sum: under the
+/// variant the sum holds that payload operand is the sum's own payload, and the
+/// other variants' payloads are not part of the value.
 OpFoldResult MakeOp::fold(FoldAdaptor) {
   auto tag = getTag().getDefiningOp<TagOp>();
   if (!tag || tag.getInput().getType() != getResult().getType())
@@ -202,13 +201,6 @@ OpFoldResult MakeOp::fold(FoldAdaptor) {
     Value payload = getPayloadOf(variant);
     if (!payload)
       continue;
-    if (auto select = payload.getDefiningOp<arith::SelectOp>()) {
-      auto holds = select.getCondition().getDefiningOp<IsVariantOp>();
-      if (!holds || holds.getInput() != sum ||
-          holds.getIndex().getZExtValue() != variant)
-        return {};
-      payload = select.getTrueValue();
-    }
     auto read = payload.getDefiningOp<GetOp>();
     if (!read || read.getInput() != sum ||
         read.getIndex().getZExtValue() != variant)
