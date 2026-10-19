@@ -1,4 +1,5 @@
 #include "BranchArms.hpp"
+#include "CompareOfSelect.hpp"
 #include "ConvertToLLVM.hpp"
 #include "ConvertToSCF.hpp"
 #include "LoweringContribution.hpp"
@@ -74,9 +75,14 @@ struct LoweringContribution : lowering::LoweringContributionInterface {
 /// other variant aborts, or the assertion after a branch that builds the sum
 /// refutes the arm that builds another variant. The rewrites run wherever a
 /// canonicalization does, so the value of the live arm reaches the branch's
-/// readers as itself whichever order the reads are lowered and inlined in.
+/// readers as itself whichever order the reads are lowered and inlined in. A
+/// tag a branch between two constant tags selects is compared through that
+/// select (populateCompareOfSelectPatterns), so the assertion of a checked read
+/// is the branch's condition whether the sum crossed a boundary as its leaves
+/// or not.
 void SumDialect::getCanonicalizationPatterns(RewritePatternSet &results) const {
   populateBranchArmPatterns(results);
+  populateCompareOfSelectPatterns(results);
 }
 
 Operation *SumDialect::materializeConstant(OpBuilder &builder, Attribute value,
