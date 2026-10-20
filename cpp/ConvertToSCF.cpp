@@ -19,57 +19,49 @@ struct MatchOpLowering : OpRewritePattern<MatchOp> {
     size_t numVariants = sumTy.getNumVariants();
 
     Value tag = TagOp::create(rewriter, loc, op.getInput());
-    auto switchOp = createVariantSwitch(
-        rewriter, loc, op.getResultTypes(), tag, numVariants,
-        [&](size_t i, Region &tgtRegion) {
-          Region &srcRegion = op.getCases()[i];
+    // Variants 0 through n - 2 are the switch's cases and the last its default,
+    // so every tag the sum holds has its arm.
+    SmallVector<int64_t> cases;
+    for (size_t variant = 0; variant + 1 < numVariants; ++variant)
+      cases.push_back(variant);
+    auto switchOp = scf::IndexSwitchOp::create(
+        rewriter, loc, op.getResultTypes(), tag, cases, cases.size());
+    for (size_t i = 0; i < numVariants; ++i) {
+      Region &srcRegion = op.getCases()[i];
+      Region &tgtRegion = i + 1 < numVariants ? switchOp.getCaseRegions()[i]
+                                              : switchOp.getDefaultRegion();
 
-          bool isNullary = sumTy.getPayloadTypes(i).empty();
+      bool isNullary = sumTy.getPayloadTypes(i).empty();
 
-          Block *entryBlock = rewriter.createBlock(&tgtRegion);
-          rewriter.setInsertionPointToStart(entryBlock);
+      Block *entryBlock = rewriter.createBlock(&tgtRegion);
+      rewriter.setInsertionPointToStart(entryBlock);
 
-          // Inline source region
-          rewriter.inlineRegionBefore(srcRegion, tgtRegion, tgtRegion.end());
+      // Inline source region
+      rewriter.inlineRegionBefore(srcRegion, tgtRegion, tgtRegion.end());
 
-          if (isNullary) {
-            // Nullary variant: no payload, no block args to replace
-            Block *secondBlock = &*std::next(tgtRegion.begin());
-            rewriter.mergeBlocks(secondBlock, entryBlock, {});
-          } else {
-            // Extract payload with sum.get
-            Value payload = GetOp::create(rewriter, loc, op.getInput(), i);
+      if (isNullary) {
+        // Nullary variant: no payload, no block args to replace
+        Block *secondBlock = &*std::next(tgtRegion.begin());
+        rewriter.mergeBlocks(secondBlock, entryBlock, {});
+      } else {
+        // Extract payload with sum.get
+        Value payload = GetOp::create(rewriter, loc, op.getInput(), i);
 
-            // Merge, replacing block arg with payload
-            Block *secondBlock = &*std::next(tgtRegion.begin());
-            rewriter.mergeBlocks(secondBlock, entryBlock, {payload});
-          }
+        // Merge, replacing block arg with payload
+        Block *secondBlock = &*std::next(tgtRegion.begin());
+        rewriter.mergeBlocks(secondBlock, entryBlock, {payload});
+      }
 
-          // Replace sum.yield with scf.yield
-          auto yield = cast<YieldOp>(tgtRegion.back().getTerminator());
-          rewriter.setInsertionPoint(yield);
-          rewriter.replaceOpWithNewOp<scf::YieldOp>(yield, yield.getResults());
-        });
+      // Replace sum.yield with scf.yield
+      auto yield = cast<YieldOp>(tgtRegion.back().getTerminator());
+      rewriter.setInsertionPoint(yield);
+      rewriter.replaceOpWithNewOp<scf::YieldOp>(yield, yield.getResults());
+    }
 
     rewriter.replaceOp(op, switchOp.getResults());
     return success();
   }
 };
-
-scf::IndexSwitchOp
-createVariantSwitch(OpBuilder &builder, Location loc, TypeRange resultTypes,
-                    Value tag, size_t numVariants,
-                    function_ref<void(size_t variant, Region &arm)> fillArm) {
-  SmallVector<int64_t> cases;
-  for (size_t variant = 0; variant + 1 < numVariants; ++variant)
-    cases.push_back(variant);
-  auto select = scf::IndexSwitchOp::create(builder, loc, resultTypes, tag, cases,
-                                           cases.size());
-  for (size_t variant = 0; variant < numVariants; ++variant)
-    fillArm(variant, variant + 1 < numVariants ? select.getCaseRegions()[variant]
-                                               : select.getDefaultRegion());
-  return select;
-}
 
 void populateSumToSCFConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<MatchOpLowering>(patterns.getContext());

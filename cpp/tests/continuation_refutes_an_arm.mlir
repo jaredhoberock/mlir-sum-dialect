@@ -1,4 +1,5 @@
 // RUN: mlir-opt --canonicalize %s | FileCheck %s
+// RUN: mlir-opt --pass-pipeline="builtin.module(leaf-conversion)" %s | FileCheck %s --check-prefix=FLAT
 
 // An scf.if followed, past pure operations, by the assertion of its condition
 // is that assertion followed by its then arm: every run that takes the else arm
@@ -61,16 +62,18 @@ func.func @negated_condition_takes_the_else_arm(%o: !O, %m: memref<i64>) -> i64 
   return %r : i64
 }
 
-// An Option built by a loop only where n is small, unwrapped: the loop runs
-// after the assertion that n is small, never where it is not.
-// CHECK-LABEL: func.func @loop_in_the_arm
-// CHECK-SAME: (%[[N:.*]]: index)
-// CHECK-NOT: scf.if
-// CHECK: %[[SMALL:.*]] = arith.cmpi ult, %[[N]]
-// CHECK-NEXT: cf.assert %[[SMALL]], "unwrap on None"
-// CHECK-NEXT: %[[ACC:.*]] = scf.for
-// CHECK-NOT: sum.
-// CHECK: return %[[ACC]]
+// An Option built by a loop only where n is small, unwrapped: once the
+// flattening takes the branch's sum apart, its tag is a choice between two
+// constants on the condition, the unwrap's assertion is of that condition, and
+// the loop runs after the assertion that n is small, never where it is not.
+// FLAT-LABEL: func.func @loop_in_the_arm
+// FLAT-SAME: (%[[N:.*]]: index)
+// FLAT-NOT: scf.if
+// FLAT: %[[SMALL:.*]] = arith.cmpi ult, %[[N]]
+// FLAT-NEXT: cf.assert %[[SMALL]], "unwrap on None"
+// FLAT-NEXT: %[[ACC:.*]] = scf.for
+// FLAT-NOT: sum.
+// FLAT: return %[[ACC]]
 func.func @loop_in_the_arm(%n: index) -> i64 {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index

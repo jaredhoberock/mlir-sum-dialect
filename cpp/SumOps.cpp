@@ -1,4 +1,3 @@
-#include "RebuiltSum.hpp"
 #include "Sum.hpp"
 #include "SumOps.hpp"
 #include "SumTypeInterface.hpp"
@@ -48,22 +47,17 @@ LogicalResult GetOp::verify() {
   return success();
 }
 
-/// The payload of variant k where the sum is built in view: a make gives its
-/// payload operand of variant k, whatever its tag, and a sum a branch selects
-/// among makes gives the payload of variant k that dominates the read
-/// (RebuiltSum::getDominatingPayload). The read is meaningful only where the
-/// sum holds variant k, and there the sum carries that payload; elsewhere the
-/// read is poison, which any value refines. A read of a poison sum is poison:
-/// a poison sum holds no payload that is not poison.
+/// The payload of variant k of a make is its payload operand of variant k,
+/// whatever its tag. The read is meaningful only where the sum holds variant k,
+/// and there the sum carries that payload; elsewhere the read is poison, which
+/// any value refines. A read of a poison sum is poison: a poison sum holds no
+/// payload that is not poison.
 OpFoldResult GetOp::fold(FoldAdaptor adaptor) {
   if (isa_and_nonnull<ub::PoisonAttrInterface>(adaptor.getInput()))
     return adaptor.getInput();
   uint64_t index = getIndex().getZExtValue();
   if (auto make = getInput().getDefiningOp<MakeOp>())
     return make.getPayloadOf(index);
-  if (std::optional<RebuiltSum> rebuilt = RebuiltSum::match(getInput()))
-    if (Value payload = rebuilt->getDominatingPayload(index))
-      return payload;
   return {};
 }
 
@@ -101,28 +95,20 @@ OpFoldResult IsVariantOp::fold(FoldAdaptor adaptor) {
 
 namespace {
 
-/// Whether a built sum holds variant k, read off what names its variant: a
-/// make's tag compared with k (a constant tag folds instead), a switch's tag
-/// compared with k, or an if's condition where its then arm makes k and the
-/// condition's negation where its else arm does (RebuiltSum).
-struct IsVariantOfBuiltSum : OpRewritePattern<IsVariantOp> {
+/// Whether a make holds variant k is its tag compared with k; a make whose tag
+/// is a constant answers the question instead (IsVariantOp::fold).
+struct IsVariantOfMake : OpRewritePattern<IsVariantOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(IsVariantOp op,
                                 PatternRewriter &rewriter) const override {
-    if (auto make = op.getInput().getDefiningOp<MakeOp>()) {
-      Value expected =
-          arith::ConstantIndexOp::create(rewriter, op.getLoc(),
-                                         op.getIndex().getZExtValue());
-      rewriter.replaceOpWithNewOp<arith::CmpIOp>(
-          op, arith::CmpIPredicate::eq, make.getTag(), expected);
-      return success();
-    }
-    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
-    if (!rebuilt)
+    auto make = op.getInput().getDefiningOp<MakeOp>();
+    if (!make)
       return failure();
-    rewriter.replaceOp(op, rebuilt->buildHolds(rewriter, op.getLoc(),
-                                               op.getIndex().getZExtValue()));
+    Value expected = arith::ConstantIndexOp::create(
+        rewriter, op.getLoc(), op.getIndex().getZExtValue());
+    rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, arith::CmpIPredicate::eq,
+                                               make.getTag(), expected);
     return success();
   }
 };
@@ -131,7 +117,7 @@ struct IsVariantOfBuiltSum : OpRewritePattern<IsVariantOp> {
 
 void IsVariantOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                               MLIRContext *context) {
-  patterns.add<IsVariantOfBuiltSum>(context);
+  patterns.add<IsVariantOfMake>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -156,22 +142,6 @@ std::optional<size_t> MakeOp::getConstantVariant() {
       tag.uge(type.getNumVariants()))
     return std::nullopt;
   return tag.getZExtValue();
-}
-
-MakeOp MakeOp::createOfVariant(OpBuilder &builder, Location loc, Type type,
-                               size_t variant, Value payload) {
-  auto sumType = cast<SumTypeInterface>(type);
-  Value tag = arith::ConstantIndexOp::create(builder, loc, variant);
-  SmallVector<Value> payloads;
-  for (size_t each = 0, e = sumType.getNumVariants(); each != e; ++each) {
-    ArrayRef<Type> carried = sumType.getPayloadTypes(each);
-    if (carried.empty())
-      continue;
-    payloads.push_back(each == variant ? payload
-                                       : ub::PoisonOp::create(builder, loc,
-                                                              carried.front()));
-  }
-  return MakeOp::create(builder, loc, type, tag, payloads);
 }
 
 LogicalResult MakeOp::verify() {
@@ -370,30 +340,6 @@ void MatchOp::getSuccessorRegions(RegionBranchPoint point,
     successors.emplace_back(&caseRegion);
 }
 
-namespace {
-
-/// A match of a sum a branch selects among makes (RebuiltSum) moves into the
-/// branch's arms, each running the case of the variant it makes on its own
-/// make's payload, so the sum is no longer built to be taken apart.
-struct SinkMatchIntoRebuiltSum : OpRewritePattern<MatchOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(MatchOp op,
-                                PatternRewriter &rewriter) const override {
-    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
-    if (!rebuilt)
-      return failure();
-    return rebuilt->sink(op, rewriter);
-  }
-};
-
-} // namespace
-
-void MatchOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
-                                          MLIRContext *context) {
-  patterns.add<SinkMatchIntoRebuiltSum>(context);
-}
-
 void MatchOp::getRegionInvocationBounds(
     ArrayRef<Attribute> operands, SmallVectorImpl<InvocationBounds> &bounds) {
   bounds.append(getNumRegions(), InvocationBounds(/*lb=*/0, /*ub=*/1));
@@ -425,54 +371,15 @@ OpFoldResult TagOp::fold(FoldAdaptor adaptor) {
 
 namespace {
 
-/// The tag of a sum a branch selects among makes is the variant it holds: a
-/// switch's tag clamped to the last variant, or an if's choice between the
-/// variants its two arms make (RebuiltSum).
-struct TagOfRebuiltSum : OpRewritePattern<TagOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(TagOp op,
-                                PatternRewriter &rewriter) const override {
-    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
-    if (!rebuilt)
-      return failure();
-    rewriter.replaceOp(op, rebuilt->buildTag(rewriter, op.getLoc()));
-    return success();
-  }
-};
-
-/// The switch on a rebuilt sum's tag that a match lowers to moves into the
-/// branch's arms as the match does (SinkMatchIntoRebuiltSum). It is tried
-/// before the tag folds to a choice between variants, which would cut the
-/// switch's tie to the sum.
-struct SinkSwitchOnRebuiltTag : OpRewritePattern<TagOp> {
-  SinkSwitchOnRebuiltTag(MLIRContext *context)
-      : OpRewritePattern(context, /*benefit=*/2) {}
-
-  LogicalResult matchAndRewrite(TagOp op,
-                                PatternRewriter &rewriter) const override {
-    std::optional<RebuiltSum> rebuilt = RebuiltSum::match(op.getInput());
-    if (!rebuilt)
-      return failure();
-    for (Operation *user : op->getUsers())
-      if (auto select = dyn_cast<scf::IndexSwitchOp>(user))
-        if (succeeded(rebuilt->sink(select, rewriter)))
-          return success();
-    return failure();
-  }
-};
-
 /// A comparison of a sum's tag for equality with a constant k is the question
 /// whether the sum holds variant k, which `sum.is_variant` asks of the sum
 /// itself: each `arith.cmpi eq` of the tag with k becomes `is_variant k`, and
-/// each `ne` its negation, so the question folds through whatever builds the
-/// sum (IsVariantOfBuiltSum) and an assertion of it states the condition of
-/// the branch that selects the sum. It is tried before the tag of a rebuilt sum
-/// becomes a choice between variants (TagOfRebuiltSum), which no fold ties back
-/// to that condition. A constant that names no variant is left to arith.
+/// each `ne` its negation, so the question has one form whatever spelled it,
+/// the form the branch rewrites (BranchArms.hpp) read in an assertion that a
+/// switch on the tag takes one arm, and the form that folds through a make
+/// (IsVariantOfMake). A constant that names no variant is left to arith.
 struct CompareOfTag : OpRewritePattern<TagOp> {
-  CompareOfTag(MLIRContext *context)
-      : OpRewritePattern(context, /*benefit=*/2) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(TagOp op,
                                 PatternRewriter &rewriter) const override {
@@ -510,7 +417,7 @@ struct CompareOfTag : OpRewritePattern<TagOp> {
 
 void TagOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                         MLIRContext *context) {
-  patterns.add<SinkSwitchOnRebuiltTag, CompareOfTag, TagOfRebuiltSum>(context);
+  patterns.add<CompareOfTag>(context);
 }
 
 } // end mlir::sum

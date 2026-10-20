@@ -1,15 +1,15 @@
-// RUN: mlir-opt --pass-pipeline="builtin.module(canonicalize,inline,canonicalize)" %s | FileCheck %s
-// RUN: mlir-opt --pass-pipeline="builtin.module(inline,canonicalize)" %s | FileCheck %s
+// RUN: mlir-opt --pass-pipeline="builtin.module(leaf-conversion,inline,canonicalize)" %s | FileCheck %s
+// RUN: mlir-opt --pass-pipeline="builtin.module(inline,leaf-conversion)" %s | FileCheck %s
 
 // A callee builds an Option of a view in one arm of a branch, and its caller
-// unwraps it with a switch on the tag whose default aborts. Canonicalized
-// before the call is inlined, the switch is the assertion that the Option is
-// Some, followed by the read of the payload; after inlining, that assertion is
-// of the branch's own condition, which refutes the branch's None arm, so the
-// assertion moves ahead of the Some arm and the read folds to the view the arm
-// builds. The view is the caller's value as itself, with its static extent,
-// built after the assertion that guards it, whichever order the rewrites meet
-// it in.
+// unwraps it with a switch on the tag whose default aborts. The flattening
+// takes the Option apart, at the call's boundary or, once the call is inlined,
+// at the branch: its tag is a choice between two constants on the branch's
+// condition, so the switch is the assertion of that condition, and its payload
+// is the view the Some arm builds, the None arm's poison folded away. The view
+// is the caller's value as itself, with its static extent, built after the
+// assertion that guards it, whichever order the flattening and the inlining
+// meet it in.
 
 !View = memref<?x?xf32, strided<[?, 1], offset: ?>>
 !Opt = !sum.sum<(!View, none)>

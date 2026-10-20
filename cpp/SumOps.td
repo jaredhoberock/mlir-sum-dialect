@@ -115,13 +115,6 @@ def MakeOp : SumDialectOp<"make", [Pure]> {
     /// The variant the make builds when its tag is a constant that names one,
     /// or none.
     std::optional<size_t> getConstantVariant();
-
-    /// The make of variant `variant` of `type` holding `payload` (null for a
-    /// variant that carries none), built at `builder`'s insertion point: its
-    /// tag the index constant `variant`, and the payload operand of every
-    /// other variant that carries one a `ub.poison` of that payload's type.
-    static MakeOp createOfVariant(OpBuilder &builder, Location loc, Type type,
-                                  size_t variant, Value payload);
   }];
 }
 
@@ -162,7 +155,6 @@ def MatchOp : SumDialectOp<"match", [
 
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
-  let hasCanonicalizer = 1;
 
   let extraClassDeclaration = [{
 

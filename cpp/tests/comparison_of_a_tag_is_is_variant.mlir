@@ -1,22 +1,25 @@
 // RUN: mlir-opt --canonicalize %s | FileCheck %s
+// RUN: mlir-opt --pass-pipeline="builtin.module(leaf-conversion)" %s | FileCheck %s --check-prefix=FLAT
 
 // A comparison of a sum's tag for equality with a constant that names a variant
 // is the question whether the sum holds that variant: `arith.cmpi eq` becomes
-// `sum.is_variant` and `ne` its negation, so the question folds through the
-// branch that builds the sum to that branch's condition. A constant that names
-// no variant, and any other predicate, is left to arith.
+// `sum.is_variant` and `ne` its negation. Of a sum a branch builds, once the
+// flattening takes the sum apart, the question is of a make whose tag is a
+// choice between two constants on the branch's condition, and it folds to that
+// condition. A constant that names no variant, and any other predicate, is
+// left to arith.
 
 !O = !sum.sum<(i64, none)>
 !T = !sum.sum<(i64, none, f32)>
 
-// CHECK-LABEL: func.func @tag_of_a_sum_an_if_selects
-// CHECK-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
-// CHECK-DAG: %[[TRUE:.*]] = arith.constant true
-// CHECK-NOT: scf.if
-// CHECK-NOT: sum.
-// CHECK: %[[OTHER:.*]] = arith.xori %[[C]], %[[TRUE]]
-// CHECK-NEXT: %[[NONE:.*]] = arith.xori %[[C]], %[[TRUE]]
-// CHECK-NEXT: return %[[C]], %[[OTHER]], %[[NONE]]
+// FLAT-LABEL: func.func @tag_of_a_sum_an_if_selects
+// FLAT-SAME: (%[[C:.*]]: i1, %[[X:.*]]: i64)
+// FLAT-DAG: %[[TRUE:.*]] = arith.constant true
+// FLAT-NOT: scf.if
+// FLAT-NOT: sum.
+// FLAT: %[[OTHER:.*]] = arith.xori %[[C]], %[[TRUE]]
+// FLAT-NEXT: %[[NONE:.*]] = arith.xori %[[C]], %[[TRUE]]
+// FLAT-NEXT: return %[[C]], %[[OTHER]], %[[NONE]]
 func.func @tag_of_a_sum_an_if_selects(%c: i1, %x: i64) -> (i1, i1, i1) {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
