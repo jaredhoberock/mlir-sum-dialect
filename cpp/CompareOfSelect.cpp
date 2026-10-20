@@ -5,8 +5,8 @@
 // has it (`foldICmpSelectConstant`). It reads a sum's tag through the select
 // a branch between two constant tags canonicalizes to, so a checked read of a
 // sum built in one function and unwrapped in another folds whichever is
-// inlined first. Deleted when the fold lands in the fork, one of the fork
-// patches docs/plans/ARRAY_TO_TENSOR_PLAN.md lists.
+// inlined first. Deleted when upstream's `arith.cmpi` canonicalization folds a
+// comparison of a select between two constants against a constant.
 #include "CompareOfSelect.hpp"
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/IR/Matchers.h>

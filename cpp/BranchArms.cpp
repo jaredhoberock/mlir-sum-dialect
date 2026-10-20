@@ -4,8 +4,7 @@
 // `scf.index_switch` canonicalization the estate carries because upstream has
 // none: an arm that asserts false, and the assertion that follows a branch on
 // its own condition (CombineIfs' adjacency law, with an arm that aborts). They
-// are deleted when that canonicalization lands in the fork, one of the fork
-// patches docs/plans/ARRAY_TO_TENSOR_PLAN.md lists.
+// are deleted when upstream's canonicalization of those branches carries them.
 //
 // Every rewrite here keeps one law: the branch becomes an assertion of the
 // condition under which it takes its live arm, followed by that arm, and
