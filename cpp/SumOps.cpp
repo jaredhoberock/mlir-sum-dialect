@@ -331,13 +331,19 @@ void MatchOp::getSuccessorRegions(RegionBranchPoint point,
                                   SmallVectorImpl<RegionSuccessor> &successors) {
   // Every case returns to the op.
   if (!point.isParent()) {
-    successors.emplace_back(getOperation(), getResults());
+    successors.emplace_back(getOperation());
     return;
   }
   // Any case may be entered; its payload argument is read from the sum value,
   // not forwarded from an operand.
   for (Region &caseRegion : getCases())
     successors.emplace_back(&caseRegion);
+}
+
+/// A case's yield forwards into the op's results; entering a case forwards
+/// nothing, since its payload argument is read from the sum value.
+ValueRange MatchOp::getSuccessorInputs(RegionSuccessor successor) {
+  return successor.isOperation() ? ValueRange(getResults()) : ValueRange();
 }
 
 void MatchOp::getRegionInvocationBounds(

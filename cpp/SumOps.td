@@ -123,7 +123,7 @@ def MatchOp : SumDialectOp<"match", [
   RecursiveMemoryEffects,
   SingleBlockImplicitTerminator<"YieldOp">,
   DeclareOpInterfaceMethods<RegionBranchOpInterface,
-                            ["getRegionInvocationBounds"]>
+                            ["getRegionInvocationBounds", "getSuccessorInputs"]>
 ]> {
   let summary = "Switch on a sum type variant";
   let description = [{
