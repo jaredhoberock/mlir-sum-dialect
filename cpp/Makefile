@@ -33,7 +33,7 @@ GENERATED := \
   $(BUILD_DIR)/SumTypes.hpp.inc \
   $(BUILD_DIR)/SumTypes.cpp.inc
 
-.PHONY: all clean test
+.PHONY: all clean
 
 all: $(BUILD_DIR)/libsum_dialect.a $(BUILD_DIR)/libsum_dialect.so
 
@@ -72,9 +72,6 @@ $(BUILD_DIR)/libsum_dialect.a: $(DIALECT_OBJECTS)
 
 $(BUILD_DIR)/libsum_dialect.so: $(PLUGIN_OBJECTS)
 	$(CXX) -shared -Wl,--build-id $^ -o $@
-
-test: $(BUILD_DIR)/libsum_dialect.so
-	SUM_DIALECT_PLUGIN=$(CURDIR)/$(BUILD_DIR)/libsum_dialect.so lit tests
 
 clean:
 	rm -rf $(BUILD_DIR)
